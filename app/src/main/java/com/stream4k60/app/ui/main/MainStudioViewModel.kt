@@ -451,8 +451,8 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
    protocol=if(s.server.startsWith("rtmps",true))StreamProtocol.RTMPS else StreamProtocol.RTMP,
    ingestionUrl=s.server,streamName=s.streamKey,
    outputCodec=v.outputCodec,outputWidth=v.outputResWidth,outputHeight=v.outputResHeight,
-   // YouTube ingest accepts at most 60 FPS.
-   fps=if(s.service==StreamService.YOUTUBE)v.frameRate.coerceAtMost(60)else v.frameRate,
+   // YouTube, Twitch, Facebook and Kick ingest accept at most 60 FPS; only a custom server gets 120.
+   fps=if(s.service!=StreamService.CUSTOM)v.frameRate.coerceAtMost(60)else v.frameRate,
    bitrate=v.videoBitrateKbps*1_000
   )
  }
