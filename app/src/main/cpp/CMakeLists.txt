@@ -21,4 +21,6 @@ target_include_directories(stream4k60_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_link_libraries(stream4k60_engine
     ${log-lib} ${android-lib} ${egl-lib} ${gles3-lib} ${mediandk-lib}
     ${camera2ndk-lib} ${aaudio-lib} ${nativewindow-lib} jnigraphics)
-target_compile_options(stream4k60_engine PRIVATE -O3 -ffast-math -ftree-vectorize -march=armv9-a -DSTREAM4K60_ENGINE)
+# armv8.2-a, not armv9-a: the Astra's Snapdragon 8 Elite (Qualcomm Oryon) has no SVE/SVE2, and armv9-a lets the
+# auto-vectorizer emit SVE instructions that crash it with SIGILL. Every Android arm64 SoC in scope supports v8.2-a.
+target_compile_options(stream4k60_engine PRIVATE -O3 -ffast-math -ftree-vectorize -march=armv8.2-a -DSTREAM4K60_ENGINE)
