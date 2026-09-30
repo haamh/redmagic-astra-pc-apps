@@ -16,7 +16,7 @@ class RecordingService:Service(){
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{
         if(intent?.action==ACTION_STOP){stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();return START_NOT_STICKY}
         val n=ServiceNotifications.notification(this,ServiceNotifications.RECORDING_CHANNEL,ServiceNotifications.RECORDING_ID,"Stream4k60","Recording is running")
-        if(Build.VERSION.SDK_INT>=29)startForeground(ServiceNotifications.RECORDING_ID,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) else startForeground(ServiceNotifications.RECORDING_ID,n)
+        if(Build.VERSION.SDK_INT>=29)startForeground(ServiceNotifications.RECORDING_ID,n,ServiceNotifications.captureServiceTypes(this)) else startForeground(ServiceNotifications.RECORDING_ID,n)
         return START_STICKY
     }
     override fun onBind(intent:Intent?):IBinder?=null

@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- USB capture keeps streaming/recording alive as a connected-device service; CHANGE_NETWORK_STATE satisfies its prerequisite. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -46,7 +49,7 @@
 
         <service
             android:name=".service.StreamingService"
-            android:foregroundServiceType="camera|microphone"
+            android:foregroundServiceType="camera|microphone|connectedDevice"
             android:exported="false" />
 
         <service
@@ -56,7 +59,13 @@
 
         <service
             android:name=".service.RecordingService"
-            android:foregroundServiceType="camera|microphone"
+            android:foregroundServiceType="camera|microphone|connectedDevice"
+            android:exported="false" />
+
+        <!-- Android app audio (playback capture) and legacy screen capture. -->
+        <service
+            android:name=".service.ProjectionCaptureService"
+            android:foregroundServiceType="mediaProjection"
             android:exported="false" />
 
     </application>

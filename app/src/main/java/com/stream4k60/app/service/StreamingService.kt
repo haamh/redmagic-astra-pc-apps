@@ -16,7 +16,7 @@ class StreamingService:Service(){
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{
         if(intent?.action==ACTION_STOP){stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();return START_NOT_STICKY}
         val n=ServiceNotifications.notification(this,ServiceNotifications.STREAMING_CHANNEL,ServiceNotifications.STREAMING_ID,"Stream4k60","YouTube stream is running")
-        if(Build.VERSION.SDK_INT>=29)startForeground(ServiceNotifications.STREAMING_ID,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) else startForeground(ServiceNotifications.STREAMING_ID,n)
+        if(Build.VERSION.SDK_INT>=29)startForeground(ServiceNotifications.STREAMING_ID,n,ServiceNotifications.captureServiceTypes(this)) else startForeground(ServiceNotifications.STREAMING_ID,n)
         return START_STICKY
     }
     override fun onBind(intent:Intent?):IBinder?=null
