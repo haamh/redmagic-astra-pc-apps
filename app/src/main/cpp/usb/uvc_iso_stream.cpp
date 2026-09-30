@@ -83,6 +83,7 @@ bool UvcIsoStream::submit(Slot& slot) {
     slot.urb->actual_length = 0;
     slot.urb->error_count = 0;
     if (ioctl(fd_, USBDEVFS_SUBMITURB, slot.urb) < 0) return false;
+    inFlight_++;
     return true;
 }
 
@@ -97,11 +98,17 @@ void UvcIsoStream::stop() {
     frameQueueCv_.notify_all();
     if (thread_.joinable()) thread_.join();
     if (callbackThread_.joinable()) callbackThread_.join();
-    for (auto& s : slots_) {
-        free(s->urbMemory);
-        s->urbMemory = nullptr;
-        s->urb = nullptr;
+    if (usbfs::reapOutstanding(fd_, inFlight_)) {
+        for (auto& s : slots_) {
+            free(s->urbMemory);
+            s->urbMemory = nullptr;
+            s->urb = nullptr;
+        }
+    } else {
+        // The kernel still owns some URBs: leak their memory rather than let it write into freed buffers.
+        for (auto& s : slots_) (void)s.release();
     }
+    inFlight_ = 0;
     slots_.clear();
     frame_.clear();
     { std::lock_guard<std::mutex> lock(frameQueueMutex_); frameQueue_.clear(); }
@@ -137,6 +144,7 @@ void UvcIsoStream::reapLoop() {
             running_ = false;
             break;
         }
+        inFlight_--;
         auto* slot = reinterpret_cast<Slot*>(context);
         if (!slot || !slot->urb) continue;
         processUrb(slot);

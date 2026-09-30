@@ -11,7 +11,8 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Writes uncaught crashes to `Android/data/com.stream4k60.app/files/last-crash.txt` so they can be read with
+ * Writes uncaught crashes to `Android/data/com.stream4k60.app/files/last-crash.txt` (native crashes go to
+ * `native-crash.txt`) so they can be read with
  * `adb shell cat` even when the device's logcat is restricted, then lets Android handle the crash as usual.
  */
 object CrashReporter {
@@ -19,6 +20,9 @@ object CrashReporter {
 
     fun install(context: Context) {
         val app = context.applicationContext
+        val dir = app.getExternalFilesDir(null) ?: app.filesDir
+        // Native (C++) crashes bypass the Java handler below; the engine records those itself.
+        runCatching { com.stream4k60.app.engine.NativeEngine.installCrashHandler(java.io.File(dir, "native-crash.txt").absolutePath) }
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             runCatching { write(app, thread, error) }

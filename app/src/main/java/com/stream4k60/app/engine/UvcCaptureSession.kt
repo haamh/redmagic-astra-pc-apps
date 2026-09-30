@@ -55,11 +55,8 @@ class UvcCaptureSession(
     fun start(): Surface {
         check(!running.get()) { "UVC session already running" }
         val formats = parseFormats(connection.rawDescriptors)
-        val selected = formats.filter { it.width == width && it.height == height && it.fps == fps && it.codec.equals(formatName,true) }
-            .minByOrNull { it.maxFrameSize }
-            ?: formats.filter { it.codec.equals(formatName,true) }
-                .minByOrNull { abs(it.width-width)+abs(it.height-height)+abs(it.fps-fps) }
-            ?: error("Requested UVC format is not advertised by the device")
+        check(formats.isNotEmpty()) { "The camera did not advertise any video formats" }
+        val selected = chooseFormat(formats, width, height, fps, formatName)
 
         val choice = chooseEndpoint(selected)
             ?: error("UVC device has no usable real-time bulk or isochronous streaming endpoint")
@@ -283,17 +280,19 @@ class UvcCaptureSession(
     private fun negotiate(choice:EndpointChoice,f:Format){
         // UVC 1.1 probe/commit. The selected alternate setting's bandwidth becomes the
         // negotiated max payload transfer size, so isochronous endpoints are not starved.
-        val probeLen=26
+        // Probe/commit size depends on the camera's UVC version: 26 bytes (1.0), 34 (1.1), 48 (1.5).
+        val probeLen=probeLength(connection.rawDescriptors)
         val interval=10_000_000/f.fps.coerceAtLeast(1)
         val payload=choice.packetBytes.coerceAtLeast(1024)
         val probe=ByteArray(probeLen)
-        u16le(probe,2,f.index);u8(probe,3,f.frameIndex);u32le(probe,4,interval.toLong());
+        u16le(probe,0,1) // bmHint: keep the requested frame interval
+        u8(probe,2,f.index);u8(probe,3,f.frameIndex);u32le(probe,4,interval.toLong());
         u32le(probe,18,f.maxFrameSize.toLong());u32le(probe,22,payload.toLong())
-        controlSet(choice.intf.id,1,probe)
+        runCatching{controlSet(choice.intf.id,1,probe)}.getOrElse{error("The camera rejected the video format request (UVC probe, ${probeLen} bytes): ${it.message}")}
         val returned=ByteArray(probeLen)
         val got=controlGet(choice.intf.id,1,returned)
         val commit=if(got>=probeLen)returned.copyOf() else probe
-        controlSet(choice.intf.id,2,commit)
+        runCatching{controlSet(choice.intf.id,2,commit)}.getOrElse{error("The camera rejected the video format commit: ${it.message}")}
     }
 
     private fun applyConfiguredVideoControls(){
@@ -312,8 +311,31 @@ class UvcCaptureSession(
     private fun controlGet(interfaceNumber:Int,selector:Int,data:ByteArray):Int = connection.controlTransfer(0xA1,0x81,selector shl 8,interfaceNumber,data,0,data.size,1000)
 
     companion object {
+        /** Requested mode if advertised; otherwise the closest mode, preferring the requested codec, then MJPEG, H.264, HEVC, raw. */
+        fun chooseFormat(formats:List<Format>,width:Int,height:Int,fps:Int,codec:String):Format{
+            formats.filter{it.width==width&&it.height==height&&it.fps==fps&&it.codec.equals(codec,true)}.minByOrNull{it.maxFrameSize}?.let{return it}
+            val preference=listOf(codec.uppercase(),"MJPEG","H264","HEVC","YUYV","NV12","UYVY")
+            val codecs=formats.map{it.codec.uppercase()}.toSet()
+            val best=preference.firstOrNull{it in codecs}?:formats.first().codec.uppercase()
+            return formats.filter{it.codec.equals(best,true)}.minByOrNull{abs(it.width-width)+abs(it.height-height)+abs(it.fps-fps)*8}!!
+        }
+        /** bcdUVC from the VideoControl interface header. */
+        fun probeLength(bytes:ByteArray):Int{
+            var i=0;var subclass=-1
+            while(i+2<bytes.size){
+                val len=bytes[i].toInt() and 0xff;if(len<2||i+len>bytes.size)break
+                val type=bytes[i+1].toInt() and 0xff
+                if(type==0x04&&len>=7)subclass=if((bytes[i+5].toInt() and 0xff)==14)(bytes[i+6].toInt() and 0xff) else -1
+                if(type==0x24&&subclass==1&&len>=5&&(bytes[i+2].toInt() and 0xff)==0x01){
+                    val bcd=u16(bytes,i+3)
+                    return when{bcd>=0x0150->48;bcd>=0x0110->34;else->26}
+                }
+                i+=len
+            }
+            return 26
+        }
         fun listFormats(device:UsbDevice,connection:UsbDeviceConnection):List<Format> = parseFormats(connection.rawDescriptors)
-        private fun parseFormats(bytes:ByteArray):List<Format>{
+        internal fun parseFormats(bytes:ByteArray):List<Format>{
             val result=mutableListOf<Format>();var i=0;var formatIndex=0;var codec=""
             while(i+2<bytes.size){
                 val len=bytes[i].toInt() and 0xff;if(len<2||i+len>bytes.size)break
@@ -325,7 +347,12 @@ class UvcCaptureSession(
                         0x10->{formatIndex=bytes.getOrZero(i+3);codec=guidFourcc(bytes,i+5).ifBlank{"H264"}}
                         0x07,0x05,0x11->{
                             if(formatIndex>0&&len>=26){
-                                val frameIndex=bytes.getOrZero(i+3);val w=u16(bytes,i+5);val h=u16(bytes,i+7);val maxFrame=u32(bytes,i+21).toInt().coerceAtLeast(256*1024);val count=bytes.getOrZero(i+25)
+                                // MJPEG/uncompressed: dwMaxVideoFrameBufferSize@17, bFrameIntervalType@25.
+                                // Frame-based (H.264/HEVC, 0x11): no buffer size, bFrameIntervalType@21. Intervals start @26 in both.
+                                val frameBased=(bytes[i+2].toInt() and 0xff)==0x11
+                                val frameIndex=bytes.getOrZero(i+3);val w=u16(bytes,i+5);val h=u16(bytes,i+7)
+                                val maxFrame=(if(frameBased)w*h*2L else u32(bytes,i+17)).toInt().coerceAtLeast(256*1024)
+                                val count=bytes.getOrZero(if(frameBased)i+21 else i+25)
                                 if(count==0){val interval=u32(bytes,i+26);if(interval>0)result+=Format(formatIndex,frameIndex,w,h,(10_000_000/interval).toInt().coerceAtLeast(1),codec,maxFrame)}
                                 else repeat(count.coerceAtMost(32)){n->val interval=u32(bytes,i+26+n*4);if(interval>0)result+=Format(formatIndex,frameIndex,w,h,(10_000_000/interval).toInt().coerceAtLeast(1),codec,maxFrame)}
                             }

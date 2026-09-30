@@ -42,6 +42,7 @@ private:
     jobject callback_; jmethodID frameMethod_; JavaVM* vm_;
     std::vector<std::unique_ptr<Slot>> slots_;
     std::thread thread_; std::thread callbackThread_; std::atomic<bool> running_{false};
+    std::atomic<int> inFlight_{0}; // URBs submitted to the kernel and not yet reaped
     std::mutex frameQueueMutex_; std::condition_variable frameQueueCv_; std::deque<QueuedFrame> frameQueue_;
     std::atomic<uint64_t> frames_{0},transferErrors_{0},droppedFrames_{0};
     std::vector<uint8_t> frame_; int currentFid_=-1; bool sawError_=false;

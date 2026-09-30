@@ -9,6 +9,8 @@ object NativeEngine {
     external fun initializeRenderer(canvasWidth: Int, canvasHeight: Int, fps: Int): Boolean
     /** The EGL/shader error behind a failed [initializeRenderer]. */
     external fun getLastError(): String
+    /** Writes native crashes (signal + stack) to [path]. */
+    external fun installCrashHandler(path: String)
     external fun shutdownRenderer()
     external fun startRenderer(): Boolean
     external fun stopRenderer()

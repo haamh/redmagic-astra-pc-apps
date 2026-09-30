@@ -1,4 +1,7 @@
 #pragma once
+#include <cerrno>
+#include <poll.h>
+#include <atomic>
 #include <sys/ioctl.h>
 #include <cstdint>
 
@@ -44,5 +47,21 @@ constexpr uint32_t URB_ISO_ASAP = 0x02;
 #endif
 
 static_assert(sizeof(Urb) == (sizeof(void*) == 8 ? 56 : 32), "Unexpected usbfs URB ABI size");
+
+/**
+ * Reaps URBs until [inFlight] reaches zero or ~1 s passes. Discarded URBs still belong to the kernel until they
+ * are reaped, so their memory may only be freed afterwards. Returns true when every URB was reaped.
+ */
+inline bool reapOutstanding(int fd, std::atomic<int>& inFlight) {
+    for (int waitedMs = 0; inFlight.load() > 0 && waitedMs < 1000;) {
+        void* context = nullptr;
+        if (ioctl(fd, USBDEVFS_REAPURBNDELAY, &context) == 0) { inFlight--; continue; }
+        if (errno != EAGAIN && errno != EINTR) break; // device gone: the kernel has already dropped its URBs
+        struct pollfd pfd{fd, POLLIN, 0};
+        poll(&pfd, 1, 5);
+        waitedMs += 5;
+    }
+    return inFlight.load() <= 0 || errno == ENODEV;
+}
 static_assert(sizeof(IsoPacketDesc) == 12, "Unexpected usbfs ISO packet ABI size");
 } // namespace stream4k60::usbfs

@@ -56,6 +56,7 @@ private:
     std::thread thread_;
     std::thread callbackThread_;
     std::atomic<bool> running_{false};
+    std::atomic<int> inFlight_{0}; // URBs submitted to the kernel and not yet reaped
     std::mutex frameQueueMutex_;
     std::condition_variable frameQueueCv_;
     std::deque<QueuedFrame> frameQueue_;

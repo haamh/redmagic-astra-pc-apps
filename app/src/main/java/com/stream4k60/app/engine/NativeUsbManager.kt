@@ -66,6 +66,9 @@ class NativeUsbManager @Inject constructor(@ApplicationContext private val conte
     private fun displayName(d:UsbDevice,t:UsbDeviceType)=d.productName?:when(t){UsbDeviceType.CAPTURE_CARD->"USB Capture Card";UsbDeviceType.VIDEO_CAMERA->"USB Camera";UsbDeviceType.COMPOSITE_AV->"USB A/V Capture Device";UsbDeviceType.AUDIO_INPUT->"USB Audio Input";UsbDeviceType.HID_CONTROLLER->"USB Controller";else->d.deviceName}
     private fun detectSpeed(c:UsbDeviceConnection):UsbSpeed{val r=c.rawDescriptors;if(r.size>=4){val bcd=(r[2].toInt() and 0xFF) or ((r[3].toInt() and 0xFF) shl 8);return when{bcd>=0x0300->UsbSpeed.USB_3_0;bcd>=0x0200->UsbSpeed.USB_2_0;else->UsbSpeed.USB_1_1}};return UsbSpeed.UNKNOWN}
 
+    private val lastErrors=java.util.concurrent.ConcurrentHashMap<Int,String>()
+    /** Why the last capture start on [deviceId] failed, in words a user can act on. */
+    fun lastError(deviceId:Int):String? = lastErrors[deviceId]
     @Synchronized fun startCapture(deviceId:Int,width:Int,height:Int,fps:Int,format:String,sourceId:String="usb_$deviceId",sourceConfigJson:String="{}"):Boolean{
         val info=_devices.value.find{it.deviceId==deviceId}?:return false;val conn=connections[deviceId]?:return false;if(info.deviceType==UsbDeviceType.AUDIO_INPUT)return false
         val cfg=runCatching{JSONObject(sourceConfigJson).let{it.optJSONObject("settings")?:it}}.getOrDefault(JSONObject())
@@ -73,15 +76,16 @@ class NativeUsbManager @Inject constructor(@ApplicationContext private val conte
         if(sessions[deviceId]!=null&&sessionSignatures[deviceId]==signature)return true
         val bw=estimateBandwidth(width,height,fps,format)
         val replacingBandwidth=if(sessions[deviceId]!=null)info.estimatedBandwidthMbps else 0
-        if(bw>_budget.value.availableBandwidthMbps+replacingBandwidth)return false
+        if(bw>_budget.value.availableBandwidthMbps+replacingBandwidth){lastErrors[deviceId]="Not enough USB bandwidth for ${width}x${height}@${fps} $format (needs ~$bw Mbps). Pick a smaller format or disconnect another USB camera.";return false}
         return runCatching{
             sessions.remove(deviceId)?.stop()
             val s=UvcCaptureSession(usb.deviceList.values.first{it.deviceId==deviceId},conn,sourceId,width,height,fps,format,sourceConfigJson)
             try{s.start()}catch(error:Throwable){runCatching{s.stop()};throw error}
             sessions[deviceId]=s
             sessionSignatures[deviceId]=signature
+            lastErrors.remove(deviceId)
             _devices.value=_devices.value.map{if(it.deviceId==deviceId)it.copy(isCapturing=true,currentFormat="${width}x${height}@${fps}:$format",transport=s.transport(),estimatedBandwidthMbps=bw)else it};updateBudget();true
-        }.onFailure{Timber.e(it,"UVC capture start failed for $deviceId");sessions.remove(deviceId)?.let{runCatching{it.stop()}};sessionSignatures.remove(deviceId);_devices.value=_devices.value.map{if(it.deviceId==deviceId)it.copy(isCapturing=false,currentFormat="",transport="",estimatedBandwidthMbps=0)else it};updateBudget()}.getOrDefault(false)
+        }.onFailure{Timber.e(it,"UVC capture start failed for $deviceId");lastErrors[deviceId]=it.message?:it.javaClass.simpleName;sessions.remove(deviceId)?.let{runCatching{it.stop()}};sessionSignatures.remove(deviceId);_devices.value=_devices.value.map{if(it.deviceId==deviceId)it.copy(isCapturing=false,currentFormat="",transport="",estimatedBandwidthMbps=0)else it};updateBudget()}.getOrDefault(false)
     }
 
     @Synchronized fun videoControls(deviceId:Int):List<UvcVideoControl>{

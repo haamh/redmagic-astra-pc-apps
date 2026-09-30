@@ -121,7 +121,7 @@ fun MainStudioScreen(
             else {
                 val w=c.optInt("width",3840);val h=c.optInt("height",2160);val fps=c.optInt("fps",60);val fmt=c.optString("format","MJPEG")
                 if(usb.startCapture(deviceId,w,h,fps,fmt,src.id,src.configJson))SourceRuntimeErrors.clear(src.id)
-                else SourceRuntimeErrors.report(src.id,"USB capture did not start. Check the selected format, USB permission, and available bandwidth.")
+                else SourceRuntimeErrors.report(src.id,"USB capture did not start: ${usb.lastError(deviceId)?:"check the selected format, USB permission and bandwidth"}")
             }
         }
     }
