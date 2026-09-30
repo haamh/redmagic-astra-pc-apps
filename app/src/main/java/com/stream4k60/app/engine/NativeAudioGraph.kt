@@ -60,6 +60,7 @@ object NativeAudioGraph {
                     }
                 }
                 NativeAudioMixer.setInputConfig(handle, route.sourceId, route.volume, route.balance, route.muted, route.monitoring.ordinal, route.syncOffsetMs, route.solo)
+                applyGate(route)
             }
             for (route in external) {
                 val key = RouteKey(route.sourceId, -1)
@@ -69,6 +70,7 @@ object NativeAudioGraph {
                     }
                 }
                 NativeAudioMixer.setInputConfig(handle, route.sourceId, route.volume, route.balance, route.muted, route.monitoring.ordinal, route.syncOffsetMs, route.solo)
+                applyGate(route)
             }
             NativeAudioBridge.attach(handle)
             configuredKeys = nextKeys
@@ -108,6 +110,23 @@ object NativeAudioGraph {
         NativeAudioMixer.setInputConfig(handle, sourceId, route.volume, route.balance, route.muted, route.monitoring.ordinal, route.syncOffsetMs, route.solo)
     }
     fun stop() { synchronized(lock) { stopLocked() } }
+
+    /** Applies a gate to a running input immediately, for live preview while editing filters. */
+    fun previewGate(inputId: String, gate: NoiseGateConfig?) = synchronized(lock) {
+        if (handle == 0L) return@synchronized
+        NativeAudioMixer.setInputGate(
+            handle, inputId, gate != null,
+            gate?.openDb ?: 0f, gate?.closeDb ?: 0f, gate?.attackMs ?: 0f, gate?.holdMs ?: 0f, gate?.releaseMs ?: 0f
+        )
+    }
+
+    private fun applyGate(route: AudioInputRoute) {
+        val gate = route.noiseGate
+        NativeAudioMixer.setInputGate(
+            handle, route.sourceId, gate != null,
+            gate?.openDb ?: 0f, gate?.closeDb ?: 0f, gate?.attackMs ?: 0f, gate?.holdMs ?: 0f, gate?.releaseMs ?: 0f
+        )
+    }
 
     private fun stopLocked() {
         if (handle == 0L) return

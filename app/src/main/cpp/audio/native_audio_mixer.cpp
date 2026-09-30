@@ -71,6 +71,36 @@ bool NativeAudioMixer::pushExternalPcm(const std::string& id,const float*samples
 
 bool NativeAudioMixer::removeInput(const std::string&id){std::lock_guard<std::mutex>l(inputsMutex_);auto it=std::find_if(inputs_.begin(),inputs_.end(),[&](const auto&i){return i->id==id;});if(it==inputs_.end())return false;closeInput(*(*it));inputs_.erase(it);return true;}
 bool NativeAudioMixer::setInputConfig(const std::string&id,float volume,float balance,bool muted,int monitoring,int syncOffsetMs,bool solo){std::lock_guard<std::mutex>l(inputsMutex_);auto it=std::find_if(inputs_.begin(),inputs_.end(),[&](const auto&i){return i->id==id;});if(it==inputs_.end())return false;auto&i=*(*it);i.volume=std::max(0.f,volume);i.balance=clamp1(balance);i.muted=muted;i.monitoring=std::clamp(monitoring,0,3);i.syncOffsetMs=syncOffsetMs;i.solo=solo;return true;}
+bool NativeAudioMixer::setInputGate(const std::string&id,bool enabled,float openDb,float closeDb,float attackMs,float holdMs,float releaseMs){
+    std::lock_guard<std::mutex>l(inputsMutex_);
+    auto it=std::find_if(inputs_.begin(),inputs_.end(),[&](const auto&i){return i->id==id;});
+    if(it==inputs_.end())return false;
+    auto&g=(*it)->gate;
+    const float sr=static_cast<float>(sampleRate_);
+    const float open=std::clamp(openDb,-96.f,0.f);
+    const float close=std::min(std::clamp(closeDb,-96.f,0.f),open);
+    if(enabled&&!g.enabled){g.level=0.f;g.attenuation=0.f;g.heldSamples=0.f;g.open=false;}
+    g.enabled=enabled;
+    g.openThreshold=std::pow(10.f,open/20.f);
+    g.closeThreshold=std::pow(10.f,close/20.f);
+    g.attackRate=1.f/std::max(1.f,std::max(0.f,attackMs)*0.001f*sr);
+    g.releaseRate=1.f/std::max(1.f,std::max(0.f,releaseMs)*0.001f*sr);
+    g.holdSamples=std::max(0.f,holdMs)*0.001f*sr;
+    return true;
+}
+// Same structure as OBS's noise gate: open above the open threshold, close once the decaying
+// peak level drops below the close threshold, then hold before releasing.
+void NativeAudioMixer::applyGate(Input::Gate&g,float*stereo,size_t frames,float levelDecay){
+    for(size_t f=0;f<frames;++f){
+        const float cur=std::max(std::abs(stereo[f*2]),std::abs(stereo[f*2+1]));
+        if(cur>g.openThreshold&&!g.open)g.open=true;
+        if(g.level<g.closeThreshold&&g.open){g.heldSamples=0.f;g.open=false;}
+        g.level=std::max(g.level*levelDecay,cur);
+        if(g.open)g.attenuation=std::min(1.f,g.attenuation+g.attackRate);
+        else{g.heldSamples+=1.f;if(g.heldSamples>g.holdSamples)g.attenuation=std::max(0.f,g.attenuation-g.releaseRate);}
+        stereo[f*2]*=g.attenuation;stereo[f*2+1]*=g.attenuation;
+    }
+}
 void NativeAudioMixer::setMonitorVolume(float v){monitorVolume_=std::max(0.f,v);}void NativeAudioMixer::setMonitorMuted(bool m){monitorMuted_=m;}
 float NativeAudioMixer::getPeak(const std::string& id) const{std::lock_guard<std::mutex>l(inputsMutex_);auto it=std::find_if(inputs_.begin(),inputs_.end(),[&](const auto&i){return i->id==id;});return it==inputs_.end()?0.f:(*it)->peak.load();}
 
@@ -193,6 +223,8 @@ aaudio_data_callback_result_t NativeAudioMixer::monitorCallback(AAudioStream*,vo
 
 void NativeAudioMixer::mixLoop(){
     std::vector<float>program(static_cast<size_t>(blockFrames_)*2),monitor(static_cast<size_t>(blockFrames_)*2),tmp(static_cast<size_t>(blockFrames_)*2);
+    // Peak-envelope decay for the gate's close detection (~50 ms time constant).
+    const float gateLevelDecay=std::exp(-1.f/(0.05f*static_cast<float>(sampleRate_)));
     while(running_){
         std::fill(program.begin(),program.end(),0.f); std::fill(monitor.begin(),monitor.end(),0.f);
         uint64_t pts=UINT64_MAX; bool anyProgram=false,anyMonitor=false,anySolo=false;
@@ -220,6 +252,7 @@ void NativeAudioMixer::mixLoop(){
                     const uint64_t sourcePts=i->ring->startPtsUs();
                     if(sourcePts>commonPts+static_cast<uint64_t>(blockFrames_)*1000000ull/static_cast<uint64_t>(sampleRate_)) continue;
                     if(!i->ring->pop(tmp.data(),static_cast<size_t>(blockFrames_))) continue;
+                    if(i->gate.enabled)applyGate(i->gate,tmp.data(),static_cast<size_t>(blockFrames_),gateLevelDecay);
                     i->peak.store(i->peak.load(std::memory_order_relaxed)*0.96f,std::memory_order_relaxed);
                     pts=std::min(pts,commonPts);
                     const float v=i->volume.load(),pan=clamp1(i->balance.load()),L=v*(pan>0?1.f-pan:1.f),R=v*(pan<0?1.f+pan:1.f);

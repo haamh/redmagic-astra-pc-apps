@@ -218,11 +218,12 @@ class ObsProjectImporter(private val context: Context) {
                     }
                 }
                 val importedFilters = def["filters"]?.jsonArray ?: JsonArray(emptyList())
-                val mappedFilters = mapSupportedFilters(sourceName, importedFilters, warnings)
-                if (mappedFilters.isNotEmpty()) {
+                val (videoFilters, audioFilters) = mapSupportedFilters(sourceName, importedFilters, root, warnings)
+                if (videoFilters.isNotEmpty() || audioFilters.isNotEmpty()) {
                     settings = buildJsonObject {
                         for ((key, value) in settings) put(key, value)
-                        put("videoFilters", mappedFilters)
+                        if (videoFilters.isNotEmpty()) put("videoFilters", videoFilters)
+                        if (audioFilters.isNotEmpty()) put("audioFilters", audioFilters)
                     }
                 }
                 val transform = buildJsonObject {
@@ -299,11 +300,12 @@ class ObsProjectImporter(private val context: Context) {
     }
 
     /**
-     * Maps OBS video filters to the ordered Android GPU filter chain (see VideoFilterChain), keeping OBS order.
-     * All originals, including unsupported filters, remain in FilterEntity.
+     * Maps OBS filters to the ordered Android video chain (VideoFilterChain) and audio filters (AudioFilterChain),
+     * keeping OBS order. All originals, including unsupported filters, remain in FilterEntity.
      */
-    private fun mapSupportedFilters(sourceName: String, filters: JsonArray, warnings: MutableList<String>): JsonArray {
+    private fun mapSupportedFilters(sourceName: String, filters: JsonArray, root: File, warnings: MutableList<String>): Pair<JsonArray, JsonArray> {
         val stages = mutableListOf<JsonObject>()
+        val audioStages = mutableListOf<JsonObject>()
         filters.forEachIndexed { index, element ->
             val filter = element as? JsonObject ?: return@forEachIndexed
             val id = filter["id"]?.jsonPrimitive?.contentOrNull.orEmpty().lowercase()
@@ -338,6 +340,33 @@ class ObsProjectImporter(private val context: Context) {
                     put("smoothness", (settings.number("smoothness", 50.0) / 1000.0).coerceIn(0.001, 1.0))
                     putKeyAdjustments(settings, opacity, isV2)
                 }
+                "clut_filter" -> "LUT" to buildJsonObject {
+                    val relinked = rewriteAssetPaths(buildJsonObject { settings["image_path"]?.let { put("image_path", it) } }, root, warnings)
+                    put("path", relinked["image_path"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                    put("amount", settings.number("clut_amount", 1.0).coerceIn(0.0, 1.0))
+                }
+                "sharpen_filter" -> "SHARPEN" to buildJsonObject {
+                    put("sharpness", settings.number("sharpness", 0.08).coerceIn(0.0, 1.0))
+                }
+                "noise_gate_filter" -> {
+                    val open = settings.number("open_threshold", -26.0).coerceIn(-96.0, 0.0)
+                    val close = settings.number("close_threshold", -32.0).coerceIn(-96.0, open)
+                    audioStages += buildJsonObject {
+                        put("id", UUID.randomUUID().toString())
+                        put("type", "NOISE_GATE")
+                        put("name", name)
+                        put("enabled", enabled)
+                        put("settings", buildJsonObject {
+                            put("openDb", open)
+                            put("closeDb", close)
+                            put("closeFollowsOpen", kotlin.math.abs(open - close - 6.0) < 0.01)
+                            put("attackMs", settings.number("attack_time", 25.0).coerceAtLeast(0.0))
+                            put("holdMs", settings.number("hold_time", 200.0).coerceAtLeast(0.0))
+                            put("releaseMs", settings.number("release_time", 150.0).coerceAtLeast(0.0))
+                        })
+                    }
+                    return@forEachIndexed
+                }
                 "luma_key_filter" -> "LUMA_KEY" to buildJsonObject {
                     put("lumaMin", settings.number("luma_min", 0.0).coerceIn(0.0, 1.0))
                     put("lumaMax", settings.number("luma_max", 1.0).coerceIn(0.0, 1.0))
@@ -361,9 +390,12 @@ class ObsProjectImporter(private val context: Context) {
             warnings += "Source '$sourceName' has ${stages.size} supported OBS filters. The Android compositor renders the first 8 enabled filters; the rest are listed in the filter editor."
         }
         if (stages.isNotEmpty()) {
-            warnings += "Source '$sourceName': ${stages.size} OBS filter(s) were mapped in order to the Android GPU filter chain. Chroma key uses a single sample per pixel, so key edges can differ slightly from OBS's box-filtered key."
+            warnings += "Source '$sourceName': ${stages.size} OBS video filter(s) were mapped in order to the Android GPU filter chain."
         }
-        return JsonArray(stages)
+        if (audioStages.size > 1) {
+            warnings += "Source '$sourceName' has ${audioStages.size} OBS noise gates. Android applies the first enabled one."
+        }
+        return JsonArray(stages) to JsonArray(audioStages)
     }
 
     /** OBS stores gamma as a signed offset and applies pow(c, exponent); Android stores gamma as 1/exponent. */

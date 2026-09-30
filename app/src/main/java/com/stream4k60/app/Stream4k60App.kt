@@ -4,6 +4,7 @@ import android.app.Application
 import com.stream4k60.app.data.repository.SettingsRepository
 import com.stream4k60.app.engine.NativeEngine
 import com.stream4k60.app.engine.AstraDeviceMonitor
+import com.stream4k60.app.engine.LutLibrary
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,7 @@ class Stream4k60App:Application(){
     override fun onCreate(){
         super.onCreate()
         AstraDeviceMonitor.start(this)
+        LutLibrary.initialize(this)
         if(BuildConfig.DEBUG)Timber.plant(Timber.DebugTree())
         check(NativeEngine.initializeRenderer(3840,2160,60)){"Native GPU compositor initialization failed"}
         appScope.launch {

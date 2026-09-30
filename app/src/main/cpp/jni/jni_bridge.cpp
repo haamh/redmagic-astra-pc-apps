@@ -45,6 +45,20 @@ extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_se
     static_assert(sizeof(jint)==sizeof(int)&&sizeof(jfloat)==sizeof(float));
     g.updateFilterChain(jstr(e,id),reinterpret_cast<const int*>(t.data()),(int)count,p.data(),(int)paramCount);
 }
+extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSourceLut(JNIEnv*e,jclass,jstring id,jint slot,jstring key,jint size,jbyteArray rgb,jfloatArray domainMin,jfloatArray domainMax){
+    if(!rgb||size<2)return;
+    const jsize n=e->GetArrayLength(rgb);
+    const size_t expected=static_cast<size_t>(size)*size*size*3;
+    if(static_cast<size_t>(n)<expected)return;
+    std::vector<uint8_t> data(expected);
+    e->GetByteArrayRegion(rgb,0,static_cast<jsize>(expected),reinterpret_cast<jbyte*>(data.data()));
+    float dmin[3]={0,0,0},dmax[3]={1,1,1};
+    if(domainMin&&e->GetArrayLength(domainMin)>=3)e->GetFloatArrayRegion(domainMin,0,3,dmin);
+    if(domainMax&&e->GetArrayLength(domainMax)>=3)e->GetFloatArrayRegion(domainMax,0,3,dmax);
+    g.setLut(jstr(e,id),slot,jstr(e,key),size,data.data(),dmin,dmax);
+}
+extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_clearSourceLut(JNIEnv*e,jclass,jstring id,jint slot){g.clearLut(jstr(e,id),slot);}
+extern "C" JNIEXPORT jstring JNICALL Java_com_stream4k60_app_engine_NativeEngine_getSourceLutKey(JNIEnv*e,jclass,jstring id,jint slot){return e->NewStringUTF(g.lutKey(jstr(e,id),slot).c_str());}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_removeSourceLayer(JNIEnv*e,jclass,jstring id){g.releaseSource(jstr(e,id),e);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setTransition(JNIEnv*,jclass,jint type,jint duration){g.setTransition(type,duration);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setTransitionProgress(JNIEnv*,jclass,jfloat p){g.setTransitionProgress(p);}
@@ -115,6 +129,10 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_stream4k60_app_engine_NativeAudio
 }
 extern "C" JNIEXPORT jboolean JNICALL Java_com_stream4k60_app_engine_NativeAudioMixer_setInputConfig(JNIEnv* env,jclass,jlong handle,jstring sourceId,jfloat volume,jfloat balance,jboolean muted,jint monitoring,jint syncOffsetMs,jboolean solo){
     std::shared_ptr<stream4k60::NativeAudioMixer> m;{std::lock_guard<std::mutex> l(um);auto it=audioMixers.find(handle);if(it==audioMixers.end())return JNI_FALSE;m=it->second;}return m->setInputConfig(jstr(env,sourceId),volume,balance,muted,monitoring,syncOffsetMs,solo)?JNI_TRUE:JNI_FALSE;
+}
+extern "C" JNIEXPORT jboolean JNICALL Java_com_stream4k60_app_engine_NativeAudioMixer_setInputGate(JNIEnv* env,jclass,jlong handle,jstring sourceId,jboolean enabled,jfloat openDb,jfloat closeDb,jfloat attackMs,jfloat holdMs,jfloat releaseMs){
+    std::shared_ptr<stream4k60::NativeAudioMixer> m;{std::lock_guard<std::mutex> l(um);auto it=audioMixers.find(handle);if(it==audioMixers.end())return JNI_FALSE;m=it->second;}
+    return m->setInputGate(jstr(env,sourceId),enabled,openDb,closeDb,attackMs,holdMs,releaseMs)?JNI_TRUE:JNI_FALSE;
 }
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeAudioMixer_setMonitorVolume(JNIEnv*,jclass,jlong handle,jfloat volume){std::shared_ptr<stream4k60::NativeAudioMixer> m;{std::lock_guard<std::mutex> l(um);auto it=audioMixers.find(handle);if(it==audioMixers.end())return;m=it->second;}m->setMonitorVolume(volume);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeAudioMixer_setMonitorMuted(JNIEnv*,jclass,jlong handle,jboolean muted){std::shared_ptr<stream4k60::NativeAudioMixer> m;{std::lock_guard<std::mutex> l(um);auto it=audioMixers.find(handle);if(it==audioMixers.end())return;m=it->second;}m->setMonitorMuted(muted);}

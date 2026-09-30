@@ -43,11 +43,11 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.stream4k60.app.ui.main.SourceItem
+import com.stream4k60.app.engine.AudioFilterChain
+import com.stream4k60.app.engine.VideoFilterChain
 import com.stream4k60.app.ui.util.showImeOnFocus
 
-private val videoFilterSourceTypes = setOf(
-    "CAMERA", "USB_CAPTURE", "SCREEN_CAPTURE", "MEDIA", "BROWSER", "IMAGE", "IMAGE_SLIDESHOW", "TEXT", "COLOR"
-)
+private val filterSourceTypes = VideoFilterChain.VIDEO_SOURCE_TYPES + AudioFilterChain.AUDIO_SOURCE_TYPES
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
@@ -168,9 +168,9 @@ fun SourcePanel(
                                     onClick = { contextMenuSourceId = null; onRequestCapturePermission(source.id) }
                                 )
                             }
-                            if (source.type.uppercase() in videoFilterSourceTypes) {
+                            if (source.type.uppercase() in filterSourceTypes) {
                                 androidx.compose.material3.DropdownMenuItem(
-                                    text = { Text("Video Filters…") },
+                                    text = { Text("Filters…") },
                                     onClick = { contextMenuSourceId = null; onFilters(source.id) }
                                 )
                             }

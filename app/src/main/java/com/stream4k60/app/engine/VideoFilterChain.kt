@@ -17,7 +17,9 @@ enum class VideoFilterType(val nativeId: Int, val label: String) {
     COLOR_CORRECTION(1, "Color Correction"),
     CHROMA_KEY(2, "Chroma Key"),
     COLOR_KEY(3, "Color Key"),
-    LUMA_KEY(4, "Luma Key");
+    LUMA_KEY(4, "Luma Key"),
+    LUT(5, "Apply LUT"),
+    SHARPEN(6, "Sharpen");
 
     companion object {
         fun fromName(value: String?): VideoFilterType? = entries.firstOrNull { it.name.equals(value, true) }
@@ -55,6 +57,9 @@ data class VideoFilterStage(
             VideoFilterType.LUMA_KEY -> mapOf(
                 "lumaMin" to 0.0, "lumaMax" to 1.0, "lumaMinSmooth" to 0.0, "lumaMaxSmooth" to 0.0
             )
+            // path: .cube or PNG LUT (content:// URI or app-private file). amount: 0..1 blend with the original.
+            VideoFilterType.LUT -> mapOf("path" to "", "amount" to 1.0)
+            VideoFilterType.SHARPEN -> mapOf("sharpness" to 0.08)
         }
 
         /** Parses #RRGGBB or #AARRGGBB into an ARGB int. */
@@ -68,10 +73,17 @@ data class VideoFilterStage(
 }
 
 object VideoFilterChain {
+    /** Source types drawn by the compositor, which can take video filters. */
+    val VIDEO_SOURCE_TYPES = setOf(
+        "CAMERA", "USB_CAPTURE", "SCREEN_CAPTURE", "MEDIA", "BROWSER", "IMAGE", "IMAGE_SLIDESHOW", "TEXT", "COLOR"
+    )
+
     /** Must match kMaxFilterStages in gl_compositor.h. */
     const val MAX_STAGES = 8
     /** Four vec4 parameters per stage; must match the shader's uStageParams layout. */
     const val FLOATS_PER_STAGE = 16
+    /** LUT stages rendered per source; must match kMaxLutSlots in gl_compositor.h. */
+    const val MAX_LUT_SLOTS = 2
 
     fun read(configJson: String): List<VideoFilterStage> {
         val root = runCatching { JSONObject(configJson) }.getOrDefault(JSONObject())
@@ -141,8 +153,19 @@ object VideoFilterChain {
     }
 
     /** Packs enabled stages for NativeEngine.setSourceFilterChain. Stages past [MAX_STAGES] are not sent. */
+    /** Enabled stages the compositor renders: at most [MAX_LUT_SLOTS] LUTs and [MAX_STAGES] stages overall. */
+    fun renderedStages(stages: List<VideoFilterStage>): List<VideoFilterStage> {
+        var luts = 0
+        return stages.filter { it.enabled && (it.type != VideoFilterType.LUT || luts++ < MAX_LUT_SLOTS) }.take(MAX_STAGES)
+    }
+
+    /** LUT file per slot, in the slot order used by [pack]. */
+    fun lutPaths(stages: List<VideoFilterStage>): List<String> =
+        renderedStages(stages).filter { it.type == VideoFilterType.LUT }.map { it.settings["path"]?.toString().orEmpty() }
+
     fun pack(stages: List<VideoFilterStage>): Pair<IntArray, FloatArray> {
-        val active = stages.filter { it.enabled }.take(MAX_STAGES)
+        val active = renderedStages(stages)
+        var lutSlot = 0
         val types = IntArray(active.size)
         val params = FloatArray(active.size * FLOATS_PER_STAGE)
         active.forEachIndexed { index, stage ->
@@ -177,6 +200,8 @@ object VideoFilterChain {
                 VideoFilterType.LUMA_KEY -> p.set(0,
                     stage.float("lumaMin").coerceIn(0f, 1f), stage.float("lumaMax").coerceIn(0f, 1f),
                     stage.float("lumaMinSmooth").coerceIn(0f, 1f), stage.float("lumaMaxSmooth").coerceIn(0f, 1f))
+                VideoFilterType.LUT -> p.set(0, stage.float("amount").coerceIn(0f, 1f), (lutSlot++).toFloat(), 0f, 0f)
+                VideoFilterType.SHARPEN -> p.set(0, stage.float("sharpness").coerceIn(0f, 1f), 0f, 0f, 0f)
             }
             p.copyInto(params, index * FLOATS_PER_STAGE)
         }

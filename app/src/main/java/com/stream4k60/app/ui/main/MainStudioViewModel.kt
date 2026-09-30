@@ -1,5 +1,6 @@
 package com.stream4k60.app.ui.main
 
+import com.stream4k60.app.engine.AudioFilterChain
 import android.content.Context
 import android.media.AudioManager
 import androidx.lifecycle.ViewModel
@@ -234,11 +235,11 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
  }
  private fun parseAudioRoute(src:SourceItem):AudioInputRoute{
   val j=sourceAudioSettings(src.configJson)
-  return AudioInputRoute(src.id,j.optInt("deviceId",-1),j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f),j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f),j.optBoolean("muted",false),runCatching{AudioMonitoring.valueOf(j.optString("monitoring","MONITOR_AND_OUTPUT"))}.getOrDefault(AudioMonitoring.MONITOR_AND_OUTPUT),j.optInt("syncOffsetMs",0).coerceIn(-2000,2000),j.optBoolean("solo",false))
+  return AudioInputRoute(src.id,j.optInt("deviceId",-1),j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f),j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f),j.optBoolean("muted",false),runCatching{AudioMonitoring.valueOf(j.optString("monitoring","MONITOR_AND_OUTPUT"))}.getOrDefault(AudioMonitoring.MONITOR_AND_OUTPUT),j.optInt("syncOffsetMs",0).coerceIn(-2000,2000),j.optBoolean("solo",false),AudioFilterChain.noiseGate(src.configJson))
  }
  private fun parsePlaybackRoute(src:SourceItem):AudioInputRoute{
   val j=sourceAudioSettings(src.configJson)
-  return AudioInputRoute(NativeAudioBridge.PLAYBACK_SOURCE_ID,-1,j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f),j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f),j.optBoolean("muted",false),runCatching{AudioMonitoring.valueOf(j.optString("monitoring","OUTPUT_ONLY"))}.getOrDefault(AudioMonitoring.OUTPUT_ONLY),j.optInt("syncOffsetMs",0).coerceIn(-2000,2000),j.optBoolean("solo",false))
+  return AudioInputRoute(NativeAudioBridge.PLAYBACK_SOURCE_ID,-1,j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f),j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f),j.optBoolean("muted",false),runCatching{AudioMonitoring.valueOf(j.optString("monitoring","OUTPUT_ONLY"))}.getOrDefault(AudioMonitoring.OUTPUT_ONLY),j.optInt("syncOffsetMs",0).coerceIn(-2000,2000),j.optBoolean("solo",false),AudioFilterChain.noiseGate(src.configJson))
  }
  private fun audioRoutes(): List<AudioInputRoute> = _sources.value.filter { (it.type.equals("AUDIO_INPUT", true) || it.type.equals("USB_CAPTURE", true)) && it.isVisible }.mapNotNull { src ->
   runCatching {
@@ -246,14 +247,15 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
    val j=sourceAudioSettings(src.configJson); val id=j.optInt(if(isCaptureCard)"audioDeviceId" else "deviceId",-1); if(id<0) null else AudioInputRoute(
     sourceId=if(isCaptureCard)"usb_audio_${src.id}" else src.id, deviceId=id, volume=j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f), balance=j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f), muted=j.optBoolean("muted",false),
     monitoring=runCatching{AudioMonitoring.valueOf(j.optString("monitoring","MONITOR_AND_OUTPUT"))}.getOrDefault(AudioMonitoring.MONITOR_AND_OUTPUT),
-    syncOffsetMs=j.optInt("syncOffsetMs",0).coerceIn(-2000,2000), solo=j.optBoolean("solo",false)
+    syncOffsetMs=j.optInt("syncOffsetMs",0).coerceIn(-2000,2000), solo=j.optBoolean("solo",false),
+    noiseGate=AudioFilterChain.noiseGate(src.configJson)
    )
   }.getOrNull()
  }
  private fun mediaAudioRoutes():List<AudioInputRoute> = _sources.value.filter{it.type.equals("MEDIA",true)&&it.isVisible}.mapNotNull{src->
   runCatching{
    val j=sourceSettings(src.configJson);val audioId="media_audio_${src.id}"
-   AudioInputRoute(audioId,-1,j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f),j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f),j.optBoolean("muted",!j.optBoolean("audioEnabled",true)),runCatching{AudioMonitoring.valueOf(j.optString("monitoring","OUTPUT_ONLY"))}.getOrDefault(AudioMonitoring.OUTPUT_ONLY),j.optInt("syncOffsetMs",0).coerceIn(-2000,2000),j.optBoolean("solo",false))
+   AudioInputRoute(audioId,-1,j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f),j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f),j.optBoolean("muted",!j.optBoolean("audioEnabled",true)),runCatching{AudioMonitoring.valueOf(j.optString("monitoring","OUTPUT_ONLY"))}.getOrDefault(AudioMonitoring.OUTPUT_ONLY),j.optInt("syncOffsetMs",0).coerceIn(-2000,2000),j.optBoolean("solo",false),AudioFilterChain.noiseGate(src.configJson))
   }.getOrNull()
  }
  private fun monitorDeviceId(): Int? = _sources.value.firstOrNull { it.type.equals("AUDIO_OUTPUT",true) && it.isVisible }?.let { runCatching { sourceSettings(it.configJson).optInt("deviceId",-1).takeIf { id -> id>=0 } }.getOrNull() }

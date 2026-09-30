@@ -18,6 +18,10 @@ enum class RawPixelFormat : int { NONE = 0, YUYV = 1, UYVY = 2, NV12 = 3 };
 // Ordered per-layer filter chain; must match VideoFilterChain.MAX_STAGES / FLOATS_PER_STAGE in Kotlin.
 constexpr int kMaxFilterStages = 8;
 constexpr int kFilterStageFloats = 16;
+// Stage type ids shared with VideoFilterType.nativeId in Kotlin.
+constexpr int kStageLut = 5;
+// LUT stages per source; each slot has its own sampler in the layer shader.
+constexpr int kMaxLutSlots = 2;
 
 struct SourceLayer {
     std::string id;
@@ -45,6 +49,10 @@ public:
     void setSourceBufferSize(const std::string& id,int w,int h,JNIEnv* env);
     void updateLayer(const std::string& id,float x,float y,float w,float h,float pivotX,float pivotY,float rot,float sx,float sy,float opacity,float cl,float ct,float cr,float cb,bool visible,int z,bool fh,bool fv);
     void updateFilterChain(const std::string& id,const int* types,int count,const float* params,int paramCount);
+    // 3D LUT for a source's LUT slot. rgb is size^3 RGB8 texels, red fastest. key identifies the loaded file.
+    void setLut(const std::string& id,int slot,const std::string& key,int size,const uint8_t* rgb,const float* domainMin,const float* domainMax);
+    void clearLut(const std::string& id,int slot);
+    std::string lutKey(const std::string& id,int slot);
     bool updateRgba(const std::string& id,const uint8_t* pixels,size_t bytes,int width,int height);
     bool updateRaw(const std::string& id,const uint8_t* pixels,size_t bytes,int width,int height,RawPixelFormat format);
     bool setPreviewSurface(JNIEnv* env,jobject surface);
@@ -79,6 +87,16 @@ private:
     ANativeWindow* previewWin_=nullptr,*encoderWin_=nullptr;
     std::map<std::string,Source> sources_;
     std::map<std::string,SourceLayer> pendingFilters_;
+    struct Lut {
+        std::string key;
+        int size=0;
+        float domainMin[3]={0,0,0},domainMax[3]={1,1,1};
+        std::vector<uint8_t> pending;
+        GLuint texture=0;
+    };
+    // Keyed by "<sourceId>#<slot>"; survives source surface re-creation.
+    std::map<std::string,Lut> luts_;
+    std::vector<GLuint> lutTexturesToDelete_;
     mutable std::mutex m_;
     std::thread thread_;
     std::atomic<bool> running_{false};

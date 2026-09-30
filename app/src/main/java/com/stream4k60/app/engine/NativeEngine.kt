@@ -33,7 +33,11 @@ object NativeEngine {
     fun applySourceFilterChain(sourceId: String, stages: List<VideoFilterStage>) {
         val (types, params) = VideoFilterChain.pack(stages)
         setSourceFilterChain(sourceId, types, params)
+        LutLibrary.sync(sourceId, VideoFilterChain.lutPaths(stages))
     }
+    external fun setSourceLut(sourceId: String, slot: Int, key: String, size: Int, rgb: ByteArray, domainMin: FloatArray, domainMax: FloatArray)
+    external fun clearSourceLut(sourceId: String, slot: Int)
+    external fun getSourceLutKey(sourceId: String, slot: Int): String
     external fun updateSourceRgba(sourceId: String, rgba: ByteArray, width: Int, height: Int): Boolean
     external fun updateSourceYuvDirect(sourceId: String, frame: java.nio.ByteBuffer, width: Int, height: Int, pixelFormat: Int): Boolean
     external fun removeSourceLayer(sourceId: String)

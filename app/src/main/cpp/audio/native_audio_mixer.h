@@ -22,6 +22,8 @@ public:
     bool pushExternalPcm(const std::string& sourceId, const float* samples, size_t frames, int channels, int sampleRate, uint64_t ptsUs);
     bool removeInput(const std::string& sourceId);
     bool setInputConfig(const std::string& sourceId, float volume, float balance, bool muted, int monitoring, int syncOffsetMs, bool solo);
+    // Per-input noise gate on the 48 kHz program bus. Thresholds in dBFS; times in milliseconds.
+    bool setInputGate(const std::string& sourceId, bool enabled, float openDb, float closeDb, float attackMs, float holdMs, float releaseMs);
     void stop();
     void setMonitorVolume(float volume);
     void setMonitorMuted(bool muted);
@@ -65,6 +67,14 @@ private:
         std::atomic<bool> active{true};
         std::atomic<float> peak{0.0f};
         NativeAudioMixer* owner = nullptr;
+        struct Gate {
+            bool enabled = false;
+            float openThreshold = 0.05f, closeThreshold = 0.025f; // linear amplitude
+            float attackRate = 0.f, releaseRate = 0.f, holdSamples = 0.f;
+            // Runtime state, touched only by the mix thread.
+            float level = 0.f, attenuation = 1.f, heldSamples = 0.f;
+            bool open = false;
+        } gate;
     };
 
     static aaudio_data_callback_result_t dataCallback(AAudioStream*, void*, void*, int32_t);
@@ -72,6 +82,7 @@ private:
     static aaudio_data_callback_result_t monitorCallback(AAudioStream*, void*, void*, int32_t);
     void capture(Input& input, void* audioData, int32_t frames);
     void mixLoop();
+    static void applyGate(Input::Gate& gate, float* stereo, size_t frames, float levelDecay);
     bool openInput(Input& input);
     void closeInput(Input& input);
     bool openMonitor();

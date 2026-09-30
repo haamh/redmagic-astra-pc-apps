@@ -95,8 +95,24 @@ class VideoFilterChainTest {
     @Test
     fun unknownStageTypesAreIgnored() {
         val config = JSONObject().put("videoFilters", org.json.JSONArray()
-            .put(JSONObject().put("type", "SHARPEN"))
+            .put(JSONObject().put("type", "RENDER_DELAY"))
             .put(JSONObject().put("type", "LUMA_KEY")))
         assertEquals(listOf(VideoFilterType.LUMA_KEY), VideoFilterChain.read(config.toString()).map { it.type })
+    }
+
+    @Test
+    fun lutStagesGetSlotsAndExtraLutsAreSkipped() {
+        val stages = listOf(
+            VideoFilterStage(type = VideoFilterType.LUT).with("path", "a.cube").with("amount", 0.5),
+            VideoFilterStage(type = VideoFilterType.SHARPEN).with("sharpness", 0.2),
+            VideoFilterStage(type = VideoFilterType.LUT).with("path", "b.png"),
+            VideoFilterStage(type = VideoFilterType.LUT).with("path", "c.cube")
+        )
+        val (types, p) = VideoFilterChain.pack(stages)
+        assertEquals(listOf(5, 6, 5), types.toList())
+        assertEquals(0.5f, p[0], 0f); assertEquals(0f, p[1], 0f)                       // first LUT, slot 0
+        assertEquals(0.2f, p[16], 1e-6f)                                                   // sharpen
+        assertEquals(1f, p[32], 0f); assertEquals(1f, p[33], 0f)                          // second LUT, slot 1
+        assertEquals(listOf("a.cube", "b.png"), VideoFilterChain.lutPaths(stages))
     }
 }
