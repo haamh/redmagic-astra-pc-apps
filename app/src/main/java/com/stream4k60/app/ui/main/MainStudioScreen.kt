@@ -1,5 +1,6 @@
 package com.stream4k60.app.ui.main
 
+import androidx.hilt.navigation.compose.hiltViewModel
 import android.app.Activity
 import android.content.Context
 import android.view.ViewGroup
@@ -12,7 +13,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.media.projection.MediaProjectionManager
@@ -32,7 +32,7 @@ import org.json.JSONObject
 fun MainStudioScreen(
     onOpenSettings:(String)->Unit,
     onOpenProfiles:()->Unit,
-    vm:MainStudioViewModel=viewModel()
+    vm:MainStudioViewModel=hiltViewModel()
 ){
     val streaming by vm.streamState.collectAsState();val streamError by vm.streamError.collectAsState();val recording by vm.recordState.collectAsState();val studio by vm.isStudioModeEnabled.collectAsState();val selectedTransition by vm.selectedTransition.collectAsState();val scenes by vm.scenes.collectAsState();val sceneCollections by vm.sceneCollections.collectAsState();val activeCollectionId by vm.activeSceneCollectionId.collectAsState();val active by vm.activeScene.collectAsState();val sources by vm.sources.collectAsState();val sourceErrors by SourceRuntimeErrors.errors.collectAsState();val videoConfig by vm.videoConfig.collectAsState();val importedRtmpEndpoint by vm.importedRtmpEndpoint.collectAsState();var selectedSourceId by remember{mutableStateOf<String?>(null)};val canvasFocusRequester=remember{FocusRequester()};var search by remember{mutableStateOf(false)};var yt by remember{mutableStateOf(false)};var customRtmp by remember{mutableStateOf(false)};var addSource by remember{mutableStateOf(false)};var editingSource by remember{mutableStateOf<SourceItem?>(null)};var filteringSource by remember{mutableStateOf<SourceItem?>(null)}
     LaunchedEffect(active?.id) { selectedSourceId = null }

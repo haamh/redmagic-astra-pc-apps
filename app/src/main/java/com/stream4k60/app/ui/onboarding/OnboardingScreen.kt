@@ -1,16 +1,16 @@
 package com.stream4k60.app.ui.onboarding
 
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun OnboardingScreen(
-    viewModel: OnboardingViewModel = viewModel(),
+    viewModel: OnboardingViewModel = hiltViewModel(),
     onFinish: () -> Unit
 ) {
     Surface(modifier = Modifier.fillMaxSize()) {
