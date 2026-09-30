@@ -36,7 +36,22 @@ android {
         }
     }
 
+    // A fixed debug key checked into the repo: every machine (and every cloud build) signs with the same
+    // certificate, so the Google sign-in registration (package + SHA-1) keeps working and updates install over
+    // the previous APK. It is a debug key only; never use it for a Play Store release.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("stream4k60-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(
