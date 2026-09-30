@@ -543,6 +543,11 @@ Until those checks pass, this is a development checkpoint, not a finished produc
 - Current user acceptance scope: multiple external UVC camera/capture-card sources over USB-C, linked USB audio where exposed, app source mixing and one-way OBS import. The Astra camera, virtual-camera output and screen recording/capture are not required. User does not need chroma key or AI segmentation. Editable fields request Android's native keyboard on focus; this compiles but remains unverified on Astra.
 - REDMAGIC publicly names Snapdragon 8 Elite, RedCore R3 Pro and its custom Synaptics touch chip. Snapdragon subsystems include Oryon CPU, Adreno GPU, Hexagon NPU and Spectra ISP; only the public Android API and actual runtime capabilities are app-reachable. The exact Astra board BOM, Synaptics model, PMIC and display controller are not published. Do not confuse the 8 Elite tablet with Astra 2.
 
+### Checkpoint 2026-09-30
+
+- Ordered video filter chain is implemented (see HANDOFF.md). Remaining filter work: multi-pass filters that need neighboring pixels or extra textures (sharpen, blur, LUT, image mask/blend, scroll, render delay, crop/pad), audio filter DSP, and on-device visual comparison with OBS.
+- JVM unit tests now exist under `app/src/test`; add tests alongside new pure-logic code.
+
 ### Immediate continuation tasks
 
 1. Review `OBS_PARITY_LEDGER.md` against the full `OBS_FEATURE_IMPLEMENTATION_SPEC.md`. Keep feature scope Android-native and OBS import-only.

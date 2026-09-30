@@ -15,6 +15,10 @@ namespace stream4k60 {
 
 enum class RawPixelFormat : int { NONE = 0, YUYV = 1, UYVY = 2, NV12 = 3 };
 
+// Ordered per-layer filter chain; must match VideoFilterChain.MAX_STAGES / FLOATS_PER_STAGE in Kotlin.
+constexpr int kMaxFilterStages = 8;
+constexpr int kFilterStageFloats = 16;
+
 struct SourceLayer {
     std::string id;
     GLuint textureId = 0;
@@ -23,8 +27,9 @@ struct SourceLayer {
     float cropL=0,cropT=0,cropR=0,cropB=0;
     int z=0;
     bool visible=true,flipH=false,flipV=false,external=true;
-    float brightness=0.0f, contrast=1.0f, saturation=1.0f, gamma=1.0f, hueDegrees=0.0f;
-    bool chromaKeyEnabled=false; float chromaR=0.0f, chromaG=1.0f, chromaB=0.0f, chromaSimilarity=0.35f, chromaSmoothness=0.08f;
+    int filterCount=0;
+    int filterTypes[kMaxFilterStages]={};
+    float filterParams[kMaxFilterStages*kFilterStageFloats]={};
     RawPixelFormat rawFormat = RawPixelFormat::NONE;
     int rawWidth=0,rawHeight=0;
     float texMatrix[16];
@@ -39,7 +44,7 @@ public:
     void releaseSource(const std::string& id,JNIEnv* env);
     void setSourceBufferSize(const std::string& id,int w,int h,JNIEnv* env);
     void updateLayer(const std::string& id,float x,float y,float w,float h,float pivotX,float pivotY,float rot,float sx,float sy,float opacity,float cl,float ct,float cr,float cb,bool visible,int z,bool fh,bool fv);
-    void updateEffects(const std::string& id,float brightness,float contrast,float saturation,float gamma,float hueDegrees,bool chromaKey,float r,float g,float b,float similarity,float smoothness);
+    void updateFilterChain(const std::string& id,const int* types,int count,const float* params,int paramCount);
     bool updateRgba(const std::string& id,const uint8_t* pixels,size_t bytes,int width,int height);
     bool updateRaw(const std::string& id,const uint8_t* pixels,size_t bytes,int width,int height,RawPixelFormat format);
     bool setPreviewSurface(JNIEnv* env,jobject surface);
@@ -73,7 +78,7 @@ private:
     EGLSurface preview_=EGL_NO_SURFACE,encoder_=EGL_NO_SURFACE;
     ANativeWindow* previewWin_=nullptr,*encoderWin_=nullptr;
     std::map<std::string,Source> sources_;
-    std::map<std::string,SourceLayer> pendingEffects_;
+    std::map<std::string,SourceLayer> pendingFilters_;
     mutable std::mutex m_;
     std::thread thread_;
     std::atomic<bool> running_{false};
@@ -85,7 +90,7 @@ private:
     void renderTo(EGLSurface target,int width,int height,int canvasWidth,int canvasHeight);
     void destroyWindow(EGLSurface& s,ANativeWindow*& w);
     Source* source(const std::string&id);
-    void applyPendingEffects(SourceLayer& layer,const std::string&id);
+    void applyPendingFilters(SourceLayer& layer,const std::string&id);
     void bindSurfaceTexture(Source& s,JNIEnv* env);
     void renderTransitionOverlay(int width,int height);
 };

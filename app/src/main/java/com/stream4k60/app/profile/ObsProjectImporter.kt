@@ -218,11 +218,11 @@ class ObsProjectImporter(private val context: Context) {
                     }
                 }
                 val importedFilters = def["filters"]?.jsonArray ?: JsonArray(emptyList())
-                val mappedEffects = mapSupportedFilters(sourceName, importedFilters, warnings)
-                if (mappedEffects.isNotEmpty()) {
+                val mappedFilters = mapSupportedFilters(sourceName, importedFilters, warnings)
+                if (mappedFilters.isNotEmpty()) {
                     settings = buildJsonObject {
                         for ((key, value) in settings) put(key, value)
-                        put("effects", mappedEffects)
+                        put("videoFilters", mappedFilters)
                     }
                 }
                 val transform = buildJsonObject {
@@ -298,91 +298,102 @@ class ObsProjectImporter(private val context: Context) {
         return ImportedCollection(SceneCollectionEntity(collectionId, name, active, 0), scenes, sources, filters)
     }
 
-    /** Imports the subset represented by the Android compositor; all originals remain in FilterEntity. */
-    private fun mapSupportedFilters(sourceName: String, filters: JsonArray, warnings: MutableList<String>): JsonObject {
-        var brightness: Double? = null
-        var contrast: Double? = null
-        var saturation: Double? = null
-        var gamma: Double? = null
-        var hue: Double? = null
-        var chromaColor: String? = null
-        var chromaSimilarity: Double? = null
-        var chromaSmoothness: Double? = null
-        var colorCorrectionSeen = false
-        var chromaKeySeen = false
-
+    /**
+     * Maps OBS video filters to the ordered Android GPU filter chain (see VideoFilterChain), keeping OBS order.
+     * All originals, including unsupported filters, remain in FilterEntity.
+     */
+    private fun mapSupportedFilters(sourceName: String, filters: JsonArray, warnings: MutableList<String>): JsonArray {
+        val stages = mutableListOf<JsonObject>()
         filters.forEachIndexed { index, element ->
             val filter = element as? JsonObject ?: return@forEachIndexed
-            val id = filter["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val id = filter["id"]?.jsonPrimitive?.contentOrNull.orEmpty().lowercase()
             val name = filter["name"]?.jsonPrimitive?.contentOrNull ?: "Filter ${index + 1}"
             val enabled = filter["enabled"]?.jsonPrimitive?.booleanOrNull ?: true
-            if (!enabled) return@forEachIndexed
             val settings = filter["settings"] as? JsonObject ?: JsonObject(emptyMap())
-            when (id.lowercase()) {
-                "color_filter", "color_filter_v2", "color_correction_filter" -> {
-                    if (colorCorrectionSeen) {
-                        warnings += "Source '$sourceName' has multiple active OBS color-correction filters. Android applies one color-correction stage; '$name' and its settings were preserved but not applied."
-                        return@forEachIndexed
-                    }
-                    colorCorrectionSeen = true
-                    brightness = settings.number("brightness", 0.0).coerceIn(-1.0, 1.0)
-                    val rawContrast = settings.number("contrast", 0.0)
-                    val isV2 = id.endsWith("_v2") || filter["version"]?.jsonPrimitive?.contentOrNull == "2"
-                    contrast = if (!isV2) (rawContrast + 1.0).coerceIn(0.0, 2.0)
-                    else if (rawContrast < 0.0) (1.0 / (1.0 - rawContrast)).coerceIn(0.0, 2.0) else (rawContrast + 1.0).coerceIn(0.0, 2.0)
-                    saturation = (settings.number("saturation", 0.0) + 1.0).coerceIn(0.0, 2.0)
-                    val rawGamma = settings.number("gamma", 0.0)
-                    gamma = if (rawGamma < 0.0) 1.0 - rawGamma else 1.0 / (1.0 + rawGamma)
-                    hue = ((settings.number("hue_shift", settings.number("hue", 0.0)) + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
-                    val colorMultiply = settings["color_multiply"]?.jsonPrimitive?.longOrNull
-                    val colorAdd = settings["color_add"]?.jsonPrimitive?.longOrNull
-                    if (kotlin.math.abs(settings.number("opacity", 1.0) - 1.0) > 0.001 ||
-                        colorMultiply != null && colorMultiply != 0xFFFFFFFFL || colorAdd != null && colorAdd != 0L) {
-                        warnings += "Source '$sourceName' color filter '$name' was translated approximately. OBS opacity/color wash controls were preserved but are not part of the Android color-correction stage."
-                    }
-                    warnings += "Source '$sourceName' color filter '$name' was mapped to the Android compositor. Filter appearance may differ from OBS."
+            val isV2 = id.endsWith("_v2") || filter["version"]?.jsonPrimitive?.intOrNull == 2
+            // OBS v1 filters store opacity as an integer percentage; v2 uses 0..1.
+            val opacity = if (isV2) settings.number("opacity", 1.0) else settings.number("opacity", 100.0) / 100.0
+            val (type, mapped) = when (id.removeSuffix("_v2")) {
+                "color_filter", "color_correction_filter" -> "COLOR_CORRECTION" to buildJsonObject {
+                    put("gamma", obsGammaToAndroid(settings.number("gamma", 0.0)))
+                    put("contrast", obsContrastToMultiplier(settings.number("contrast", 0.0), isV2))
+                    put("brightness", settings.number("brightness", 0.0).coerceIn(-1.0, 1.0))
+                    put("saturation", (settings.number("saturation", 0.0) + 1.0).coerceIn(0.0, 4.0))
+                    put("hueDegrees", settings.number("hue_shift", 0.0).coerceIn(-180.0, 180.0))
+                    put("opacity", opacity.coerceIn(0.0, 1.0))
+                    val multiply = settings["color_multiply"] ?: settings["color"]
+                    multiply?.jsonPrimitive?.contentOrNull?.let(::obsColorHex)?.let { put("colorMultiply", it) }
+                    settings["color_add"]?.jsonPrimitive?.contentOrNull?.let(::obsColorHex)?.let { put("colorAdd", it) }
                 }
-                "chroma_key_filter", "chroma_key_filter_v2" -> {
-                    if (chromaKeySeen) {
-                        warnings += "Source '$sourceName' has multiple active OBS chroma-key filters. Android applies one chroma-key stage; '$name' and its settings were preserved but not applied."
-                        return@forEachIndexed
-                    }
-                    chromaKeySeen = true
-                    val colorType = settings["key_color_type"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                    chromaColor = when (colorType.lowercase()) {
-                        "green" -> "#FF00FF00"
-                        "blue" -> "#FF0000FF"
-                        "magenta" -> "#FFFF00FF"
-                        else -> settings["key_color"]?.jsonPrimitive?.contentOrNull?.let(::obsOpaqueColorHex) ?: "#FF00FF00"
-                    }
-                    chromaSimilarity = (settings.number("similarity", 400.0) / 1000.0).coerceIn(0.0, 1.0)
-                    chromaSmoothness = (settings.number("smoothness", 80.0) / 1000.0).coerceIn(0.001, 0.5)
-                    warnings += "Source '$sourceName' chroma-key filter '$name' was mapped to the Android compositor. Key-edge and spill behavior may differ from OBS."
+                "chroma_key_filter" -> "CHROMA_KEY" to buildJsonObject {
+                    put("keyColor", obsKeyColor(settings, "#FF00FF00"))
+                    put("similarity", (settings.number("similarity", 400.0) / 1000.0).coerceIn(0.001, 1.0))
+                    put("smoothness", (settings.number("smoothness", 80.0) / 1000.0).coerceIn(0.001, 1.0))
+                    put("spill", (settings.number("spill", 100.0) / 1000.0).coerceIn(0.001, 1.0))
+                    putKeyAdjustments(settings, opacity, isV2)
                 }
-                else -> warnings += "Source '$sourceName' has OBS filter '$name' ($id). Its settings were preserved in the import, but this filter has no Android equivalent yet."
+                "color_key_filter" -> "COLOR_KEY" to buildJsonObject {
+                    put("keyColor", obsKeyColor(settings, "#FF00FF00"))
+                    put("similarity", (settings.number("similarity", 80.0) / 1000.0).coerceIn(0.001, 1.0))
+                    put("smoothness", (settings.number("smoothness", 50.0) / 1000.0).coerceIn(0.001, 1.0))
+                    putKeyAdjustments(settings, opacity, isV2)
+                }
+                "luma_key_filter" -> "LUMA_KEY" to buildJsonObject {
+                    put("lumaMin", settings.number("luma_min", 0.0).coerceIn(0.0, 1.0))
+                    put("lumaMax", settings.number("luma_max", 1.0).coerceIn(0.0, 1.0))
+                    put("lumaMinSmooth", settings.number("luma_min_smooth", 0.0).coerceIn(0.0, 1.0))
+                    put("lumaMaxSmooth", settings.number("luma_max_smooth", 0.0).coerceIn(0.0, 1.0))
+                }
+                else -> {
+                    warnings += "Source '$sourceName' has OBS filter '$name' ($id). Its settings were preserved in the import, but this filter has no Android equivalent yet."
+                    return@forEachIndexed
+                }
+            }
+            stages += buildJsonObject {
+                put("id", UUID.randomUUID().toString())
+                put("type", type)
+                put("name", name)
+                put("enabled", enabled)
+                put("settings", mapped)
             }
         }
-
-        if (!colorCorrectionSeen && !chromaKeySeen) return JsonObject(emptyMap())
-        return buildJsonObject {
-            put("brightness", JsonPrimitive(brightness ?: 0.0))
-            put("contrast", JsonPrimitive(contrast ?: 1.0))
-            put("saturation", JsonPrimitive(saturation ?: 1.0))
-            put("gamma", JsonPrimitive(gamma ?: 1.0))
-            put("hueDegrees", JsonPrimitive(hue ?: 0.0))
-            put("chromaKeyEnabled", JsonPrimitive(chromaKeySeen))
-            put("chromaKeyColor", JsonPrimitive(chromaColor ?: "#FF00FF00"))
-            put("chromaSimilarity", JsonPrimitive(chromaSimilarity ?: 0.35))
-            put("chromaSmoothness", JsonPrimitive(chromaSmoothness ?: 0.08))
+        if (stages.size > 8) {
+            warnings += "Source '$sourceName' has ${stages.size} supported OBS filters. The Android compositor renders the first 8 enabled filters; the rest are listed in the filter editor."
         }
+        if (stages.isNotEmpty()) {
+            warnings += "Source '$sourceName': ${stages.size} OBS filter(s) were mapped in order to the Android GPU filter chain. Chroma key uses a single sample per pixel, so key edges can differ slightly from OBS's box-filtered key."
+        }
+        return JsonArray(stages)
     }
+
+    /** OBS stores gamma as a signed offset and applies pow(c, exponent); Android stores gamma as 1/exponent. */
+    private fun obsGammaToAndroid(raw: Double): Double {
+        val exponent = if (raw < 0.0) 1.0 - raw else 1.0 / (1.0 + raw)
+        return (1.0 / exponent).coerceIn(0.1, 3.0)
+    }
+
+    private fun obsContrastToMultiplier(raw: Double, isV2: Boolean): Double =
+        (if (isV2 && raw < 0.0) 1.0 / (1.0 - raw) else raw + 1.0).coerceIn(0.0, 4.0)
+
+    private fun JsonObjectBuilder.putKeyAdjustments(settings: JsonObject, opacity: Double, isV2: Boolean) {
+        put("opacity", opacity.coerceIn(0.0, 1.0))
+        put("contrast", obsContrastToMultiplier(settings.number("contrast", 0.0), isV2))
+        put("brightness", settings.number("brightness", 0.0).coerceIn(-1.0, 1.0))
+        put("gamma", obsGammaToAndroid(settings.number("gamma", 0.0)))
+    }
+
+    private fun obsKeyColor(settings: JsonObject, fallback: String): String =
+        when (settings["key_color_type"]?.jsonPrimitive?.contentOrNull?.lowercase()) {
+            "green" -> "#FF00FF00"
+            "blue" -> "#FF0000FF"
+            "magenta" -> "#FFFF00FF"
+            "red" -> "#FFFF0000"
+            else -> settings["key_color"]?.jsonPrimitive?.contentOrNull?.let(::obsOpaqueColorHex) ?: fallback
+        }
 
     private fun JsonObject.number(key: String, fallback: Double): Double = this[key]?.jsonPrimitive?.doubleOrNull ?: fallback
 
-    private fun obsOpaqueColorHex(value: String): String? {
-        val numeric = value.toLongOrNull() ?: return obsColorHex(value)
-        return String.format(Locale.US, "#FF%06X", numeric.toInt() and 0xFFFFFF)
-    }
+    private fun obsOpaqueColorHex(value: String): String? = obsColorHex(value)?.let { "#FF" + it.substring(3) }
 
     private fun rewriteAssetPaths(settings: JsonObject, root: File, warnings: MutableList<String>): JsonObject =
         rewriteJsonValue(settings, "", root, warnings) as JsonObject
@@ -461,8 +472,10 @@ class ObsProjectImporter(private val context: Context) {
         value.removePrefix("#").takeIf { it.matches(Regex("[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8}")) }?.let {
             return if (it.length == 6) "#FF$it" else "#$it"
         }
-        val numeric = value.toLongOrNull() ?: return null
-        return String.format(Locale.US, "#%08X", numeric.toInt())
+        // OBS stores integer colors as 0xAABBGGRR; Android color strings are #AARRGGBB.
+        val abgr = value.toLongOrNull()?.toInt() ?: return null
+        val argb = (abgr and 0xFF00FF00.toInt()) or ((abgr and 0xFF) shl 16) or ((abgr shr 16) and 0xFF)
+        return String.format(Locale.US, "#%08X", argb)
     }
 
     private fun populateSourceDimensions(obsId: String, settings: JsonObject): JsonObject {

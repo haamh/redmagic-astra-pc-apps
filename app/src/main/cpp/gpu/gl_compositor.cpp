@@ -32,15 +32,41 @@ uniform vec2 uRawSize;
 uniform float uOpacity;
 uniform vec4 uCrop;
 uniform bool uFlipH;uniform bool uFlipV;
-uniform float uBrightness, uContrast, uSaturation, uGamma, uHue;
-uniform bool uChromaKey; uniform vec3 uKeyColor; uniform float uKeySimilarity, uKeySmoothness;
+const int MAX_STAGES=8;
+uniform int uStageCount;
+uniform int uStageType[MAX_STAGES];
+uniform vec4 uStageParams[MAX_STAGES*4];
 out vec4 frag;
 vec3 yuvToRgb(float y,float u,float v){y=1.16438356*(y-0.0627451);u=u-0.5019608;v=v-0.5019608;return clamp(vec3(y+1.5960268*v,y-0.391762*u-0.812968*v,y+2.017232*u),0.0,1.0);}
 vec4 rawColor(){if(uRawFormat==1||uRawFormat==2){float px=vUv.x*uRawSize.x;float pair=floor(px*0.5);float which=mod(floor(px),2.0);vec2 tc=(vec2(pair+0.5,(vUv.y*uRawSize.y)+0.5))/vec2(max(1.0,ceil(uRawSize.x*0.5)),uRawSize.y);vec4 p=texture(uRawTex,tc);float y,u,v;if(uRawFormat==1){y=(which<0.5)?p.r:p.b;u=p.g;v=p.a;}else{y=(which<0.5)?p.g:p.a;u=p.r;v=p.b;}return vec4(yuvToRgb(y,u,v),1.0);}if(uRawFormat==3){float y=texture(uRawTex,vUv).r;vec2 uv=texture(uRawAuxTex,vUv).rg;return vec4(yuvToRgb(y,uv.r,uv.g),1.0);}return vec4(0.0);}
-vec3 rgbToHsv(vec3 c){vec4 K=vec4(0.,-1./3.,2./3.,-1.);vec4 p=mix(vec4(c.bg,K.wz),vec4(c.gb,K.xy),step(c.b,c.g));vec4 q=mix(vec4(p.xyw,c.r),vec4(c.r,p.yzx),step(p.x,c.r));float d=q.x-min(q.w,q.y);float e=1e-10;return vec3(abs(q.z+(q.w-q.y)/(6.*d+e)),d/(q.x+e),q.x);}
-vec3 hsvToRgb(vec3 c){vec3 p=abs(fract(c.xxx+vec3(0.,1./3.,2./3.))*6.-3.);return c.z*mix(vec3(1.),clamp(p-1.,0.,1.),c.y);}
-vec3 applyColor(vec3 c){c=(c-0.5)*uContrast+0.5;c+=uBrightness;vec3 hsv=rgbToHsv(clamp(c,0.,1.));hsv.x=fract(hsv.x+uHue/360.);hsv.y=clamp(hsv.y*uSaturation,0.,1.);c=hsvToRgb(hsv);c=max(c,vec3(0.));c=pow(c,vec3(1.0/max(0.001,uGamma)));return clamp(c,0.,1.);}
-void main(){vec2 uv=mix(uCrop.xy,uCrop.zw,vUv);if(uFlipH)uv.x=1.-uv.x;if(uFlipV)uv.y=1.-uv.y;vec4 c=(uExternal==1)?texture(uExtTex,uv):(uRawFormat!=0?rawColor():texture(u2DTex,uv));c.rgb=applyColor(c.rgb);if(uChromaKey){float d=distance(c.rgb,uKeyColor);float a=1.0-smoothstep(uKeySimilarity,uKeySimilarity+max(0.001,uKeySmoothness),d);c.a*=a;}frag=vec4(c.rgb,c.a*uOpacity);})GLSL";
+const vec3 LUMA=vec3(0.2126,0.7152,0.0722);
+// Rotation about the gray axis (Rodrigues), which preserves neutral colors.
+vec3 hueRotate(vec3 c,float degrees){float a=radians(degrees);float cs=cos(a),sn=sin(a);vec3 k=vec3(0.57735026);
+return c*cs+cross(k,c)*sn+k*dot(k,c)*(1.0-cs);}
+// p0=(brightness,contrast,saturation,gammaExponent) p1=(hueDegrees,opacity) p2=multiply.rgb p3=add.rgb
+vec4 colorCorrection(vec4 c,vec4 p0,vec4 p1,vec4 p2,vec4 p3){vec3 rgb=pow(max(c.rgb,vec3(0.0)),vec3(p0.w));
+rgb=(rgb-0.5)*p0.y+0.5+p0.x;float l=dot(rgb,LUMA);rgb=mix(vec3(l),rgb,p0.z);
+if(p1.x!=0.0)rgb=hueRotate(rgb,p1.x);rgb=rgb*p2.rgb+p3.rgb;return vec4(clamp(rgb,0.0,1.0),c.a*p1.y);}
+// OBS key filters' own adjustment: p=(opacity,contrast,brightness,gammaExponent)
+vec4 keyAdjust(vec4 c,vec4 p){return vec4(clamp(pow(max(c.rgb,vec3(0.0)),vec3(p.w))*p.y+p.z,0.0,1.0),c.a*p.x);}
+// p0=(keyCr,keyCb,similarity,smoothness) p1.x=spill; distance measured in CbCr like OBS chroma_key_filter.
+vec4 chromaKey(vec4 c,vec4 p0,vec4 p1,vec4 p2){float cb=dot(c.rgb,vec3(-0.100644,-0.338572,0.439216))+0.501961;
+float cr=dot(c.rgb,vec3(0.439216,-0.398942,-0.040274))+0.501961;float base=distance(vec2(cr,cb),p0.xy)-p0.z;
+c.a*=pow(clamp(base/p0.w,0.0,1.0),1.5);float spill=pow(clamp(base/p1.x,0.0,1.0),1.5);
+c.rgb=mix(vec3(dot(c.rgb,LUMA)),c.rgb,spill);return keyAdjust(c,p2);}
+// p0=(key.rgb,similarity) p1.x=smoothness; RGB distance like OBS color_key_filter.
+vec4 colorKey(vec4 c,vec4 p0,vec4 p1,vec4 p2){float base=distance(c.rgb,p0.rgb)-p0.w;
+c.a*=clamp(max(base,0.0)/p1.x,0.0,1.0);return keyAdjust(c,p2);}
+// p0=(lumaMin,lumaMax,lumaMinSmooth,lumaMaxSmooth)
+vec4 lumaKey(vec4 c,vec4 p0){float l=dot(c.rgb,LUMA);
+float lo=p0.z>0.0?smoothstep(p0.x,p0.x+p0.z,l):step(p0.x,l);
+float hi=p0.w>0.0?1.0-smoothstep(p0.y-p0.w,p0.y,l):step(l,p0.y);return vec4(c.rgb,c.a*lo*hi);}
+vec4 applyFilters(vec4 c){for(int i=0;i<MAX_STAGES;++i){if(i>=uStageCount)break;int b=i*4;int t=uStageType[i];
+if(t==1)c=colorCorrection(c,uStageParams[b],uStageParams[b+1],uStageParams[b+2],uStageParams[b+3]);
+else if(t==2)c=chromaKey(c,uStageParams[b],uStageParams[b+1],uStageParams[b+2]);
+else if(t==3)c=colorKey(c,uStageParams[b],uStageParams[b+1],uStageParams[b+2]);
+else if(t==4)c=lumaKey(c,uStageParams[b]);}return c;}
+void main(){vec2 uv=mix(uCrop.xy,uCrop.zw,vUv);if(uFlipH)uv.x=1.-uv.x;if(uFlipV)uv.y=1.-uv.y;vec4 c=(uExternal==1)?texture(uExtTex,uv):(uRawFormat!=0?rawColor():texture(u2DTex,uv));c=applyFilters(c);frag=vec4(c.rgb,c.a*uOpacity);})GLSL";
 static GLuint compileShader(GLenum t,const char*s){GLuint x=glCreateShader(t);glShaderSource(x,1,&s,nullptr);glCompileShader(x);GLint ok=0;glGetShaderiv(x,GL_COMPILE_STATUS,&ok);if(!ok){glDeleteShader(x);return 0;}return x;}
 static GLuint createProgram(){auto v=compileShader(GL_VERTEX_SHADER,VS);auto f=compileShader(GL_FRAGMENT_SHADER,FS);if(!v||!f){if(v)glDeleteShader(v);if(f)glDeleteShader(f);return 0;}GLuint p=glCreateProgram();glAttachShader(p,v);glAttachShader(p,f);glBindAttribLocation(p,0,"aPos");glBindAttribLocation(p,1,"aUv");glLinkProgram(p);GLint ok=0;glGetProgramiv(p,GL_LINK_STATUS,&ok);glDeleteShader(v);glDeleteShader(f);return ok?p:0;}
 
@@ -54,16 +80,28 @@ void GlCompositor::destroyWindow(EGLSurface&s,ANativeWindow*&w){if(s!=EGL_NO_SUR
 bool GlCompositor::setPreviewSurface(JNIEnv* env,jobject js){std::lock_guard<std::mutex>lk(m_);destroyWindow(preview_,previewWin_);if(!js)return true;previewWin_=ANativeWindow_fromSurface(env,js);if(!previewWin_)return false;preview_=egl_.createWindowSurface(previewWin_);return preview_!=EGL_NO_SURFACE;}
 bool GlCompositor::setEncoderSurface(JNIEnv* env,jobject js){std::lock_guard<std::mutex>lk(m_);destroyWindow(encoder_,encoderWin_);if(!js)return true;encoderWin_=ANativeWindow_fromSurface(env,js);if(!encoderWin_)return false;encoder_=egl_.createWindowSurface(encoderWin_);return encoder_!=EGL_NO_SURFACE;}
 void GlCompositor::bindSurfaceTexture(Source&s,JNIEnv*env){if(!s.surfaceTexture)return;jclass c=env->GetObjectClass(s.surfaceTexture);s.updateTex=env->GetMethodID(c,"updateTexImage","()V");s.getMatrix=env->GetMethodID(c,"getTransformMatrix","([F)V");jfloatArray a=(jfloatArray)env->NewFloatArray(16);s.matrixArray=env->NewGlobalRef(a);env->DeleteLocalRef(a);}
- bool GlCompositor::createSource(const std::string&id,JNIEnv*env,jobject&out){bool was=running_.load();if(was)stop();eglMakeCurrent(egl_.display(),egl_.surface(),egl_.surface(),egl_.context());std::lock_guard<std::mutex>lk(m_);if(sources_.count(id)){out=env->NewLocalRef(sources_[id].surface);if(was)start();return true;}GLuint tex=0;glGenTextures(1,&tex);glBindTexture(GL_TEXTURE_EXTERNAL_OES,tex);glTexParameteri(GL_TEXTURE_EXTERNAL_OES,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_EXTERNAL_OES,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_EXTERNAL_OES,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_EXTERNAL_OES,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);jclass stc=env->FindClass("android/graphics/SurfaceTexture");jmethodID ctor=env->GetMethodID(stc,"<init>","(I)V");jobject st=env->NewObject(stc,ctor,(jint)tex);jclass sc=env->FindClass("android/view/Surface");jmethodID sctor=env->GetMethodID(sc,"<init>","(Landroid/graphics/SurfaceTexture;)V");jobject surf=env->NewObject(sc,sctor,st);Source x;x.layer.id=id;x.layer.external=true;applyPendingEffects(x.layer,id);x.external=true;x.layer.textureId=tex;x.surfaceTexture=env->NewGlobalRef(st);x.surface=env->NewGlobalRef(surf);bindSurfaceTexture(x,env);sources_[id]=x;out=env->NewLocalRef(surf);env->DeleteLocalRef(st);env->DeleteLocalRef(surf);if(was)start();return true;}
+ bool GlCompositor::createSource(const std::string&id,JNIEnv*env,jobject&out){bool was=running_.load();if(was)stop();eglMakeCurrent(egl_.display(),egl_.surface(),egl_.surface(),egl_.context());std::lock_guard<std::mutex>lk(m_);if(sources_.count(id)){out=env->NewLocalRef(sources_[id].surface);if(was)start();return true;}GLuint tex=0;glGenTextures(1,&tex);glBindTexture(GL_TEXTURE_EXTERNAL_OES,tex);glTexParameteri(GL_TEXTURE_EXTERNAL_OES,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_EXTERNAL_OES,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_EXTERNAL_OES,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_EXTERNAL_OES,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);jclass stc=env->FindClass("android/graphics/SurfaceTexture");jmethodID ctor=env->GetMethodID(stc,"<init>","(I)V");jobject st=env->NewObject(stc,ctor,(jint)tex);jclass sc=env->FindClass("android/view/Surface");jmethodID sctor=env->GetMethodID(sc,"<init>","(Landroid/graphics/SurfaceTexture;)V");jobject surf=env->NewObject(sc,sctor,st);Source x;x.layer.id=id;x.layer.external=true;applyPendingFilters(x.layer,id);x.external=true;x.layer.textureId=tex;x.surfaceTexture=env->NewGlobalRef(st);x.surface=env->NewGlobalRef(surf);bindSurfaceTexture(x,env);sources_[id]=x;out=env->NewLocalRef(surf);env->DeleteLocalRef(st);env->DeleteLocalRef(surf);if(was)start();return true;}
 void GlCompositor::setSourceBufferSize(const std::string&id,int w,int h,JNIEnv*env){std::lock_guard<std::mutex>lk(m_);auto it=sources_.find(id);if(it==sources_.end()||!it->second.surfaceTexture)return;jclass c=env->GetObjectClass(it->second.surfaceTexture);jmethodID m=env->GetMethodID(c,"setDefaultBufferSize","(II)V");if(m)env->CallVoidMethod(it->second.surfaceTexture,m,w,h);}
 void GlCompositor::releaseSource(const std::string&id,JNIEnv*env){bool was=running_.load();if(was)stop();eglMakeCurrent(egl_.display(),egl_.surface(),egl_.surface(),egl_.context());std::lock_guard<std::mutex>lk(m_);auto it=sources_.find(id);if(it==sources_.end()){if(was)start();return;}auto&s=it->second;if(s.matrixArray)env->DeleteGlobalRef(s.matrixArray);if(s.surfaceTexture)env->DeleteGlobalRef(s.surfaceTexture);if(s.surface)env->DeleteGlobalRef(s.surface);if(s.layer.textureId)glDeleteTextures(1,&s.layer.textureId);if(s.layer.auxTextureId)glDeleteTextures(1,&s.layer.auxTextureId);sources_.erase(it);if(was)start();}
 GlCompositor::Source* GlCompositor::source(const std::string&id){auto it=sources_.find(id);return it==sources_.end()?nullptr:&it->second;}
-void GlCompositor::applyPendingEffects(SourceLayer&layer,const std::string&id){auto it=pendingEffects_.find(id);if(it==pendingEffects_.end())return;const auto&p=it->second;layer.brightness=p.brightness;layer.contrast=p.contrast;layer.saturation=p.saturation;layer.gamma=p.gamma;layer.hueDegrees=p.hueDegrees;layer.chromaKeyEnabled=p.chromaKeyEnabled;layer.chromaR=p.chromaR;layer.chromaG=p.chromaG;layer.chromaB=p.chromaB;layer.chromaSimilarity=p.chromaSimilarity;layer.chromaSmoothness=p.chromaSmoothness;pendingEffects_.erase(it);}
+void GlCompositor::applyPendingFilters(SourceLayer&layer,const std::string&id){auto it=pendingFilters_.find(id);if(it==pendingFilters_.end())return;const auto&p=it->second;layer.filterCount=p.filterCount;std::copy(std::begin(p.filterTypes),std::end(p.filterTypes),layer.filterTypes);std::copy(std::begin(p.filterParams),std::end(p.filterParams),layer.filterParams);pendingFilters_.erase(it);}
 void GlCompositor::updateLayer(const std::string&id,float x,float y,float w,float h,float pivotX,float pivotY,float r,float sx,float sy,float op,float cl,float ct,float cr,float cb,bool vis,int z,bool fh,bool fv){std::lock_guard<std::mutex>lk(m_);auto*s=source(id);if(!s)return;s->layer.x=x;s->layer.y=y;s->layer.w=w;s->layer.h=h;s->layer.pivotX=pivotX;s->layer.pivotY=pivotY;s->layer.rotation=r;s->layer.scaleX=sx;s->layer.scaleY=sy;s->layer.opacity=op;s->layer.cropL=cl;s->layer.cropT=ct;s->layer.cropR=cr;s->layer.cropB=cb;s->layer.visible=vis;s->layer.z=z;s->layer.flipH=fh;s->layer.flipV=fv;}
-bool GlCompositor::updateRgba(const std::string&id,const uint8_t*pixels,size_t bytes,int width,int height){if(!pixels||bytes==0||width<=0||height<=0)return false;std::lock_guard<std::mutex>lk(m_);auto &s=sources_[id];s.layer.id=id;applyPendingEffects(s.layer,id);s.external=false;s.layer.external=false;s.layer.rawFormat=RawPixelFormat::NONE;s.pixelW=width;s.pixelH=height;s.pendingRgba.assign(pixels,pixels+bytes);s.pendingRaw.clear();s.layer.rawWidth=width;s.layer.rawHeight=height;s.layer.texMatrix[0]=s.layer.texMatrix[5]=s.layer.texMatrix[10]=s.layer.texMatrix[15]=1.f;for(int i:{1,2,3,4,6,7,8,9,11,12,13,14})s.layer.texMatrix[i]=0.f;s.layer.w=width;s.layer.h=height;return true;}
-bool GlCompositor::updateRaw(const std::string&id,const uint8_t*pixels,size_t bytes,int width,int height,RawPixelFormat format){if(!pixels||bytes==0||width<=0||height<=0||format==RawPixelFormat::NONE)return false;std::lock_guard<std::mutex>lk(m_);auto &s=sources_[id];s.layer.id=id;applyPendingEffects(s.layer,id);s.external=false;s.layer.external=false;s.layer.rawFormat=format;s.layer.rawWidth=width;s.layer.rawHeight=height;s.pixelW=width;s.pixelH=height;s.pendingRaw.assign(pixels,pixels+bytes);s.pendingRgba.clear();s.layer.w=width;s.layer.h=height;s.layer.texMatrix[0]=s.layer.texMatrix[5]=s.layer.texMatrix[10]=s.layer.texMatrix[15]=1.f;for(int i:{1,2,3,4,6,7,8,9,11,12,13,14})s.layer.texMatrix[i]=0.f;return true;}
+bool GlCompositor::updateRgba(const std::string&id,const uint8_t*pixels,size_t bytes,int width,int height){if(!pixels||bytes==0||width<=0||height<=0)return false;std::lock_guard<std::mutex>lk(m_);auto &s=sources_[id];s.layer.id=id;applyPendingFilters(s.layer,id);s.external=false;s.layer.external=false;s.layer.rawFormat=RawPixelFormat::NONE;s.pixelW=width;s.pixelH=height;s.pendingRgba.assign(pixels,pixels+bytes);s.pendingRaw.clear();s.layer.rawWidth=width;s.layer.rawHeight=height;s.layer.texMatrix[0]=s.layer.texMatrix[5]=s.layer.texMatrix[10]=s.layer.texMatrix[15]=1.f;for(int i:{1,2,3,4,6,7,8,9,11,12,13,14})s.layer.texMatrix[i]=0.f;s.layer.w=width;s.layer.h=height;return true;}
+bool GlCompositor::updateRaw(const std::string&id,const uint8_t*pixels,size_t bytes,int width,int height,RawPixelFormat format){if(!pixels||bytes==0||width<=0||height<=0||format==RawPixelFormat::NONE)return false;std::lock_guard<std::mutex>lk(m_);auto &s=sources_[id];s.layer.id=id;applyPendingFilters(s.layer,id);s.external=false;s.layer.external=false;s.layer.rawFormat=format;s.layer.rawWidth=width;s.layer.rawHeight=height;s.pixelW=width;s.pixelH=height;s.pendingRaw.assign(pixels,pixels+bytes);s.pendingRgba.clear();s.layer.w=width;s.layer.h=height;s.layer.texMatrix[0]=s.layer.texMatrix[5]=s.layer.texMatrix[10]=s.layer.texMatrix[15]=1.f;for(int i:{1,2,3,4,6,7,8,9,11,12,13,14})s.layer.texMatrix[i]=0.f;return true;}
 
-void GlCompositor::updateEffects(const std::string&id,float br,float co,float sa,float ga,float hue,bool key,float r,float g,float b,float sim,float smooth){std::lock_guard<std::mutex>lk(m_);auto apply=[&](SourceLayer&layer){layer.brightness=std::clamp(br,-1.f,1.f);layer.contrast=std::max(0.f,co);layer.saturation=std::max(0.f,sa);layer.gamma=std::max(0.01f,ga);layer.hueDegrees=hue;layer.chromaKeyEnabled=key;layer.chromaR=std::clamp(r,0.f,1.f);layer.chromaG=std::clamp(g,0.f,1.f);layer.chromaB=std::clamp(b,0.f,1.f);layer.chromaSimilarity=std::clamp(sim,0.f,1.f);layer.chromaSmoothness=std::max(0.001f,smooth);};auto*s=source(id);if(s)apply(s->layer);else{SourceLayer pending;pending.id=id;apply(pending);pendingEffects_[id]=pending;}}
+void GlCompositor::updateFilterChain(const std::string&id,const int*types,int count,const float*params,int paramCount){
+    std::lock_guard<std::mutex>lk(m_);
+    auto apply=[&](SourceLayer&layer){
+        const int n=std::clamp(std::min(count,paramCount/kFilterStageFloats),0,kMaxFilterStages);
+        layer.filterCount=n;
+        std::fill(std::begin(layer.filterTypes),std::end(layer.filterTypes),0);
+        std::fill(std::begin(layer.filterParams),std::end(layer.filterParams),0.f);
+        for(int i=0;i<n;++i)layer.filterTypes[i]=types[i];
+        std::copy(params,params+n*kFilterStageFloats,layer.filterParams);
+    };
+    if(auto*s=source(id))apply(s->layer);
+    else{SourceLayer pending;pending.id=id;apply(pending);pendingFilters_[id]=pending;}
+}
 void GlCompositor::renderTransitionOverlay(int width,int height){if(!overlayProgram_||transitionType_==0||transitionProgress_<=0.001f)return;glUseProgram(overlayProgram_);glBindVertexArray(vao_);glDisable(GL_DEPTH_TEST);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);GLint c=glGetUniformLocation(overlayProgram_,"uColor");float alpha=transitionProgress_;glUniform4f(c,transitionR_,transitionG_,transitionB_,alpha);glDrawArrays(GL_TRIANGLE_STRIP,0,4);}
 
 void GlCompositor::renderTo(EGLSurface target,int width,int height,int canvasWidth,int canvasHeight){
@@ -150,7 +188,7 @@ void GlCompositor::renderTo(EGLSurface target,int width,int height,int canvasWid
     glUseProgram(program_);
     glBindVertexArray(vao_);
     const GLint uExt=glGetUniformLocation(program_,"uExternal"),uRaw=glGetUniformLocation(program_,"uRawFormat"),uCanvas=glGetUniformLocation(program_,"uCanvas"),uRect=glGetUniformLocation(program_,"uRect"),uScale=glGetUniformLocation(program_,"uScale"),uPivot=glGetUniformLocation(program_,"uPivot"),uRot=glGetUniformLocation(program_,"uRotation"),uMat=glGetUniformLocation(program_,"uTexMatrix"),uOp=glGetUniformLocation(program_,"uOpacity"),uCrop=glGetUniformLocation(program_,"uCrop"),uFH=glGetUniformLocation(program_,"uFlipH"),uFV=glGetUniformLocation(program_,"uFlipV"),uRawSize=glGetUniformLocation(program_,"uRawSize"),uExtTex=glGetUniformLocation(program_,"uExtTex"),u2D=glGetUniformLocation(program_,"u2DTex"),uRawTex=glGetUniformLocation(program_,"uRawTex"),uRawAux=glGetUniformLocation(program_,"uRawAuxTex");
-    const GLint uBr=glGetUniformLocation(program_,"uBrightness"),uCo=glGetUniformLocation(program_,"uContrast"),uSa=glGetUniformLocation(program_,"uSaturation"),uGa=glGetUniformLocation(program_,"uGamma"),uHue=glGetUniformLocation(program_,"uHue"),uKey=glGetUniformLocation(program_,"uChromaKey"),uKeyColor=glGetUniformLocation(program_,"uKeyColor"),uKeySim=glGetUniformLocation(program_,"uKeySimilarity"),uKeySmooth=glGetUniformLocation(program_,"uKeySmoothness");
+    const GLint uStageCount=glGetUniformLocation(program_,"uStageCount"),uStageType=glGetUniformLocation(program_,"uStageType"),uStageParams=glGetUniformLocation(program_,"uStageParams");
     for(const auto& layer:layers){
         if(!layer.visible||!layer.textureId)continue;
         glUniform1i(uExt,layer.external?1:0);glUniform1i(uRaw,static_cast<int>(layer.rawFormat));
@@ -159,8 +197,8 @@ void GlCompositor::renderTo(EGLSurface target,int width,int height,int canvasWid
         glUniform4f(uRect,layer.x,layer.y,layer.w,layer.h);glUniform2f(uScale,layer.scaleX,layer.scaleY);
         glUniform2f(uPivot,layer.pivotX,layer.pivotY);glUniform1f(uRot,layer.rotation*0.01745329252f);glUniformMatrix4fv(uMat,1,GL_FALSE,layer.texMatrix);
         glUniform1f(uOp,std::clamp(layer.opacity,0.f,1.f));glUniform4f(uCrop,layer.cropL,layer.cropT,1-layer.cropR,1-layer.cropB);
-        glUniform1f(uBr,layer.brightness);glUniform1f(uCo,layer.contrast);glUniform1f(uSa,layer.saturation);glUniform1f(uGa,layer.gamma);glUniform1f(uHue,layer.hueDegrees);
-        glUniform1i(uKey,layer.chromaKeyEnabled?1:0);glUniform3f(uKeyColor,layer.chromaR,layer.chromaG,layer.chromaB);glUniform1f(uKeySim,layer.chromaSimilarity);glUniform1f(uKeySmooth,layer.chromaSmoothness);
+        glUniform1i(uStageCount,layer.filterCount);
+        if(layer.filterCount>0){glUniform1iv(uStageType,layer.filterCount,layer.filterTypes);glUniform4fv(uStageParams,layer.filterCount*4,layer.filterParams);}
         glUniform1i(uFH,layer.flipH);glUniform1i(uFV,layer.flipV);glUniform2f(uRawSize,static_cast<float>(layer.rawWidth),static_cast<float>(layer.rawHeight));
         if(layer.external){glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_EXTERNAL_OES,layer.textureId);}
         else if(layer.rawFormat==RawPixelFormat::NONE){glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,layer.textureId);}

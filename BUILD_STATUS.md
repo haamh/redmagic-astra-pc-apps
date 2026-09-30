@@ -12,7 +12,11 @@ This is a development build, not an Astra-ready app. The latest build proves com
 
 **Astra test readiness: NO.** The app has not been installed/launched or runtime-validated on Astra. Major OBS-parity and source/output behavior remains incomplete or unverified.
 
+Linux/CI builds also work (2026-09-30): Android platform 35, build-tools 34.0.0, NDK 27.0.12077973, CMake 3.22.1. JVM unit tests run with `./gradlew :app:testDebugUnitTest`.
+
 ## Implemented in source
+
+- Ordered per-source GPU video filter chain: Color Correction, Chroma Key, Color Key and Luma Key, up to 8 enabled stages applied top to bottom, with add/remove/reorder/enable and live preview. OBS filters of these types import in order. Legacy single-stage `effects` configs migrate automatically.
 
 - Room-backed profiles, scene collections, scenes, sources and filters.
 - OBS profile/scene-collection import foundations and asset relinking metadata. OBS compatibility is import-only; OBS-format export and round-trip compatibility are outside the readiness scope.
@@ -53,7 +57,7 @@ This is a development build, not an Astra-ready app. The latest build proves com
 
 - No physical Astra validation: external UVC/capture-card interoperability, multiple USB sources, display behavior, thermals, audio timing, encoder capability and sustained 4K120 remain unverified. The Astra's built-in camera is not required.
 - UVC device-variant negotiation, multi-device performance, recovery and device-control coverage remain incomplete/unverified; linked USB audio has no measured A/V sync evidence.
-- OBS-level source/filter/transition, Studio Mode, multiview and transform interaction parity is incomplete. The current GPU filter panel implements color correction and chroma key only; ordered filter chains, additional video filters and audio filters remain.
+- OBS-level source/filter/transition, Studio Mode, multiview and transform interaction parity is incomplete. Ordered video filter chains exist for per-pixel filters (color correction, chroma/color/luma key); multi-sample or texture filters (sharpen, blur, LUT, mask/blend, scroll, render delay) and all audio filters remain.
 - Copy/paste filters, multi-select/group operations, nested scenes and several OBS context actions remain incomplete. Canvas editing, crop/bounds rendering and drag reordering have not been runtime-validated yet; OBS import coverage remains incomplete. OBS-format export is not required.
 - Audio DSP filters, advanced routing, resampling/drift correction and hardware-device validation are incomplete.
 - Browser source runtime throughput/audio/security and page interaction remain. The Surface/Canvas path has compile evidence only; WebView does not expose an app-controlled per-source decoder selector.

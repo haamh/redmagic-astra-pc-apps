@@ -1,173 +1,307 @@
 package com.stream4k60.app.ui.filters
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.toMutableStateList
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.stream4k60.app.engine.NativeEngine
+import com.stream4k60.app.engine.VideoFilterChain
+import com.stream4k60.app.engine.VideoFilterStage
+import com.stream4k60.app.engine.VideoFilterType
+import com.stream4k60.app.ui.dialogs.ColorPickerDialog
 import com.stream4k60.app.ui.main.SourceItem
 import com.stream4k60.app.ui.settings.components.SettingsSlider
-import com.stream4k60.app.ui.settings.components.SettingsToggle
 import com.stream4k60.app.ui.util.showImeOnFocus
-import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private data class VideoEffects(
-    val brightness: Float,
-    val contrast: Float,
-    val saturation: Float,
-    val gamma: Float,
-    val hue: Float,
-    val chromaKeyEnabled: Boolean,
-    val chromaKeyColor: String,
-    val chromaSimilarity: Float,
-    val chromaSmoothness: Float
-)
-
+/**
+ * Ordered video filter chain editor. Filters apply top to bottom, like the OBS filter list.
+ * Edits preview live in the compositor; Cancel restores the saved chain.
+ */
 @Composable
 fun FilterEditorScreen(
     source: SourceItem,
     onApply: (String) -> Unit,
     onCancel: () -> Unit
 ) {
-    val initial = remember(source.id, source.configJson) { readEffects(source.configJson) }
-    var brightness by remember(initial) { mutableFloatStateOf(initial.brightness) }
-    var contrast by remember(initial) { mutableFloatStateOf(initial.contrast) }
-    var saturation by remember(initial) { mutableFloatStateOf(initial.saturation) }
-    var gamma by remember(initial) { mutableFloatStateOf(initial.gamma) }
-    var hue by remember(initial) { mutableFloatStateOf(initial.hue) }
-    var chromaKeyEnabled by remember(initial) { mutableStateOf(initial.chromaKeyEnabled) }
-    var chromaKeyColor by remember(initial) { mutableStateOf(initial.chromaKeyColor) }
-    var chromaSimilarity by remember(initial) { mutableFloatStateOf(initial.chromaSimilarity) }
-    var chromaSmoothness by remember(initial) { mutableFloatStateOf(initial.chromaSmoothness) }
-    var colorError by remember { mutableStateOf(false) }
+    val stages = remember(source.id, source.configJson) { VideoFilterChain.read(source.configJson).toMutableStateList() }
+    var selected by remember(source.id) { mutableIntStateOf(if (stages.isEmpty()) -1 else 0) }
+    var addMenu by remember { mutableStateOf(false) }
+
+    LaunchedEffect(source.id) {
+        // Live preview: re-send the chain whenever any stage changes.
+        snapshotFlow { stages.toList() }.collect { NativeEngine.applySourceFilterChain(source.id, it) }
+    }
+    val cancel = {
+        NativeEngine.setSourceEffectsFromConfig(source.id, source.configJson)
+        onCancel()
+    }
+    val enabledCount = stages.count { it.enabled }
 
     AlertDialog(
-        onDismissRequest = onCancel,
+        onDismissRequest = cancel,
         title = { Text("Video filters · ${source.name}") },
         text = {
-            Column(modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
+            Column(modifier = Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
                 Text(
-                    "GPU color correction and chroma key are applied to this source in the live compositor.",
+                    "Filters run on the GPU from top to bottom. Changes preview live; Apply saves them.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                SettingsSlider(
-                    "Brightness", brightness, { brightness = it }, valueRange = -1f..1f,
-                    displayValue = "${number(brightness)}",
-                    description = "Offsets image lightness. Example: 0.10 adds a small lift; large values clip detail."
-                )
-                SettingsSlider(
-                    "Contrast", contrast, { contrast = it }, valueRange = 0f..2f,
-                    displayValue = number(contrast),
-                    description = "Scales the difference from mid-gray. Example: 1.00 leaves contrast unchanged."
-                )
-                SettingsSlider(
-                    "Saturation", saturation, { saturation = it }, valueRange = 0f..2f,
-                    displayValue = number(saturation),
-                    description = "Adjusts color intensity. Example: 0.00 is monochrome; 1.00 is unchanged."
-                )
-                SettingsSlider(
-                    "Gamma", gamma, { gamma = it }, valueRange = 0.1f..3f,
-                    displayValue = number(gamma),
-                    description = "Adjusts midtone brightness. Example: 1.00 is unchanged; extreme values lose detail."
-                )
-                SettingsSlider(
-                    "Hue", hue, { hue = it }, valueRange = -180f..180f,
-                    displayValue = "${hue.roundToInt()}°",
-                    description = "Rotates source colors around the hue wheel. Example: 0° is unchanged."
-                )
-                SettingsToggle(
-                    label = "Chroma key",
-                    checked = chromaKeyEnabled,
-                    onCheckedChange = { chromaKeyEnabled = it },
-                    description = "Makes pixels close to the key color transparent. Light the background evenly for cleaner edges."
-                )
-                OutlinedTextField(
-                    value = chromaKeyColor,
-                    onValueChange = { chromaKeyColor = it.take(9); colorError = false },
-                    label = { Text("Key color") },
-                    supportingText = {
-                        Text(if (colorError) "Enter a valid hex color, for example #FF00FF00." else "Example: #FF00FF00 for green.")
-                    },
-                    isError = colorError,
-                    singleLine = true,
-                    enabled = chromaKeyEnabled,
-                    modifier = Modifier.showImeOnFocus()
-                )
-                SettingsSlider(
-                    "Similarity", chromaSimilarity, { chromaSimilarity = it }, valueRange = 0f..1f,
-                    displayValue = number(chromaSimilarity), enabled = chromaKeyEnabled,
-                    description = "Sets how much of the key color is removed. Example: 0.35; too high removes similar subject colors."
-                )
-                SettingsSlider(
-                    "Smoothness", chromaSmoothness, { chromaSmoothness = it }, valueRange = 0.001f..0.5f,
-                    displayValue = number(chromaSmoothness), enabled = chromaKeyEnabled,
-                    description = "Softens the key edge. Example: 0.08; excessive softness creates halos."
-                )
+                Spacer(Modifier.size(8.dp))
+                if (stages.isEmpty()) {
+                    Text("No filters on this source.", style = MaterialTheme.typography.bodyMedium)
+                }
+                stages.forEachIndexed { index, stage ->
+                    FilterRow(
+                        stage = stage,
+                        selected = index == selected,
+                        canMoveUp = index > 0,
+                        canMoveDown = index < stages.lastIndex,
+                        onSelect = { selected = index },
+                        onEnabledChange = { stages[index] = stage.copy(enabled = it) },
+                        onMoveUp = { stages.add(index - 1, stages.removeAt(index)); selected = index - 1 },
+                        onMoveDown = { stages.add(index + 1, stages.removeAt(index)); selected = index + 1 },
+                        onRemove = {
+                            stages.removeAt(index)
+                            selected = if (stages.isEmpty()) -1 else selected.coerceAtMost(stages.lastIndex)
+                        }
+                    )
+                }
+                if (enabledCount > VideoFilterChain.MAX_STAGES) {
+                    Text(
+                        "Only the first ${VideoFilterChain.MAX_STAGES} enabled filters are rendered. Disable or remove ${enabledCount - VideoFilterChain.MAX_STAGES}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                Box {
+                    OutlinedButton(onClick = { addMenu = true }, modifier = Modifier.padding(top = 8.dp)) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Add filter")
+                    }
+                    DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+                        VideoFilterType.entries.forEach { type ->
+                            DropdownMenuItem(text = { Text(type.label) }, onClick = {
+                                stages.add(VideoFilterStage(type = type, name = uniqueName(type.label, stages)))
+                                selected = stages.lastIndex
+                                addMenu = false
+                            })
+                        }
+                    }
+                }
+                stages.getOrNull(selected)?.let { stage ->
+                    HorizontalDivider(Modifier.padding(vertical = 12.dp))
+                    StageSettings(stage) { updated -> stages[selected] = updated }
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val parsedColor = runCatching { android.graphics.Color.parseColor(chromaKeyColor) }.getOrNull()
-                if (chromaKeyEnabled && parsedColor == null) {
-                    colorError = true
-                } else {
-                    val root = runCatching { JSONObject(source.configJson) }.getOrDefault(JSONObject())
-                    val settings = root.optJSONObject("settings")
-                    val effects = JSONObject()
-                        .put("brightness", brightness)
-                        .put("contrast", contrast)
-                        .put("saturation", saturation)
-                        .put("gamma", gamma)
-                        .put("hueDegrees", hue)
-                        .put("chromaKeyEnabled", chromaKeyEnabled)
-                        .put("chromaKeyColor", parsedColor?.let { String.format(Locale.US, "#%08X", it) } ?: chromaKeyColor)
-                        .put("chromaSimilarity", chromaSimilarity)
-                        .put("chromaSmoothness", chromaSmoothness)
-                    if (settings != null) {
-                        settings.put("effects", effects)
-                        root.put("settings", settings)
-                    } else {
-                        root.put("effects", effects)
-                    }
-                    onApply(root.toString())
-                }
-            }) { Text("Apply") }
+            TextButton(onClick = { onApply(VideoFilterChain.write(source.configJson, stages.toList())) }) { Text("Apply") }
         },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } }
+        dismissButton = { TextButton(onClick = cancel) { Text("Cancel") } }
     )
 }
 
-private fun readEffects(configJson: String): VideoEffects {
-    val root = runCatching { JSONObject(configJson) }.getOrDefault(JSONObject())
-    val settings = root.optJSONObject("settings") ?: root
-    val effects = settings.optJSONObject("effects") ?: root.optJSONObject("effects") ?: JSONObject()
-    val color = effects.optString("chromaKeyColor", "#FF00FF00")
-    return VideoEffects(
-        brightness = effects.optDouble("brightness", 0.0).toFloat().coerceIn(-1f, 1f),
-        contrast = effects.optDouble("contrast", 1.0).toFloat().coerceIn(0f, 2f),
-        saturation = effects.optDouble("saturation", 1.0).toFloat().coerceIn(0f, 2f),
-        gamma = effects.optDouble("gamma", 1.0).toFloat().coerceIn(0.1f, 3f),
-        hue = effects.optDouble("hueDegrees", 0.0).toFloat().coerceIn(-180f, 180f),
-        chromaKeyEnabled = effects.optBoolean("chromaKeyEnabled", false),
-        chromaKeyColor = color,
-        chromaSimilarity = effects.optDouble("chromaSimilarity", 0.35).toFloat().coerceIn(0f, 1f),
-        chromaSmoothness = effects.optDouble("chromaSmoothness", 0.08).toFloat().coerceIn(0.001f, 0.5f)
+@Composable
+private fun FilterRow(
+    stage: VideoFilterStage,
+    selected: Boolean,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onSelect: () -> Unit,
+    onEnabledChange: (Boolean) -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onRemove: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                RoundedCornerShape(8.dp)
+            )
+            .clickable(onClick = onSelect)
+            .padding(end = 4.dp)
+    ) {
+        Checkbox(checked = stage.enabled, onCheckedChange = onEnabledChange)
+        Column(Modifier.weight(1f)) {
+            Text(stage.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (stage.name != stage.type.label) {
+                Text(stage.type.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        IconButton(onClick = onMoveUp, enabled = canMoveUp) { Icon(Icons.Default.ArrowUpward, contentDescription = "Move ${stage.name} up") }
+        IconButton(onClick = onMoveDown, enabled = canMoveDown) { Icon(Icons.Default.ArrowDownward, contentDescription = "Move ${stage.name} down") }
+        IconButton(onClick = onRemove) { Icon(Icons.Default.Delete, contentDescription = "Remove ${stage.name}") }
+    }
+}
+
+@Composable
+private fun StageSettings(stage: VideoFilterStage, onChange: (VideoFilterStage) -> Unit) {
+    OutlinedTextField(
+        value = stage.name,
+        onValueChange = { onChange(stage.copy(name = it.take(64))) },
+        label = { Text("Filter name") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().showImeOnFocus()
     )
+    when (stage.type) {
+        VideoFilterType.COLOR_CORRECTION -> {
+            StageSlider(stage, onChange, "Gamma", "gamma", 0.1f..3f, "Midtone brightness. 1.00 is unchanged; above 1 brightens midtones.")
+            StageSlider(stage, onChange, "Contrast", "contrast", 0f..4f, "Scales the distance from mid-gray. 1.00 is unchanged.")
+            StageSlider(stage, onChange, "Brightness", "brightness", -1f..1f, "Adds a constant lift. 0.00 is unchanged; large values clip detail.")
+            StageSlider(stage, onChange, "Saturation", "saturation", 0f..4f, "Color intensity. 0.00 is monochrome; 1.00 is unchanged.")
+            StageSlider(stage, onChange, "Hue shift", "hueDegrees", -180f..180f, "Rotates colors around the hue wheel. 0° is unchanged.") { "${it.roundToInt()}°" }
+            StageSlider(stage, onChange, "Opacity", "opacity", 0f..1f, "Multiplies the source's alpha at this point in the chain.") { "${(it * 100).roundToInt()}%" }
+            ColorField("Color multiply", stage, "colorMultiply", onChange)
+            ColorField("Color add", stage, "colorAdd", onChange)
+        }
+        VideoFilterType.CHROMA_KEY -> {
+            KeyColorPresets(stage, onChange)
+            StageSlider(stage, onChange, "Similarity", "similarity", 0.001f..1f, "How much of the key color's chroma is removed. OBS default 0.40.")
+            StageSlider(stage, onChange, "Smoothness", "smoothness", 0.001f..1f, "Softens the key edge. OBS default 0.08.")
+            StageSlider(stage, onChange, "Spill reduction", "spill", 0.001f..1f, "Desaturates key-colored spill on the subject. OBS default 0.10.")
+            KeyAdjustSliders(stage, onChange)
+        }
+        VideoFilterType.COLOR_KEY -> {
+            KeyColorPresets(stage, onChange)
+            StageSlider(stage, onChange, "Similarity", "similarity", 0.001f..1f, "RGB distance treated as fully transparent. OBS default 0.08.")
+            StageSlider(stage, onChange, "Smoothness", "smoothness", 0.001f..1f, "Width of the soft edge beyond the similarity range. OBS default 0.05.")
+            KeyAdjustSliders(stage, onChange)
+        }
+        VideoFilterType.LUMA_KEY -> {
+            StageSlider(stage, onChange, "Luma min", "lumaMin", 0f..1f, "Pixels darker than this become transparent.")
+            StageSlider(stage, onChange, "Luma min smoothness", "lumaMinSmooth", 0f..1f, "Soft edge above the minimum.")
+            StageSlider(stage, onChange, "Luma max", "lumaMax", 0f..1f, "Pixels brighter than this become transparent.")
+            StageSlider(stage, onChange, "Luma max smoothness", "lumaMaxSmooth", 0f..1f, "Soft edge below the maximum.")
+        }
+    }
+}
+
+@Composable
+private fun StageSlider(
+    stage: VideoFilterStage,
+    onChange: (VideoFilterStage) -> Unit,
+    label: String,
+    key: String,
+    range: ClosedFloatingPointRange<Float>,
+    description: String,
+    format: (Float) -> String = ::number
+) {
+    val value = stage.float(key)
+    SettingsSlider(label, value.coerceIn(range), { onChange(stage.with(key, it.toDouble())) }, valueRange = range, displayValue = format(value), description = description)
+}
+
+@Composable
+private fun KeyAdjustSliders(stage: VideoFilterStage, onChange: (VideoFilterStage) -> Unit) {
+    StageSlider(stage, onChange, "Opacity", "opacity", 0f..1f, "Opacity of the keyed result.") { "${(it * 100).roundToInt()}%" }
+    StageSlider(stage, onChange, "Contrast", "contrast", 0f..4f, "Applied after keying. 1.00 is unchanged.")
+    StageSlider(stage, onChange, "Brightness", "brightness", -1f..1f, "Applied after keying. 0.00 is unchanged.")
+    StageSlider(stage, onChange, "Gamma", "gamma", 0.1f..3f, "Applied after keying. 1.00 is unchanged.")
+}
+
+@Composable
+private fun KeyColorPresets(stage: VideoFilterStage, onChange: (VideoFilterStage) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 4.dp)) {
+        listOf("Green" to "#FF00FF00", "Blue" to "#FF0000FF", "Magenta" to "#FFFF00FF").forEach { (label, hex) ->
+            OutlinedButton(onClick = { onChange(stage.with("keyColor", hex)) }) { Text(label) }
+        }
+    }
+    ColorField("Key color", stage, "keyColor", onChange)
+}
+
+@Composable
+private fun ColorField(label: String, stage: VideoFilterStage, key: String, onChange: (VideoFilterStage) -> Unit) {
+    var text by remember(stage.id, key) { mutableStateOf(VideoFilterChain.colorHex(stage.color(key))) }
+    var picking by remember { mutableStateOf(false) }
+    val stored = stage.color(key)
+    LaunchedEffect(stored) {
+        // Follow external changes (presets, picker) without rewriting a partially typed value.
+        if (VideoFilterStage.parseColor(text) != stored) text = VideoFilterChain.colorHex(stored)
+    }
+    val valid = VideoFilterStage.parseColor(text) != null
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { value ->
+                text = value.take(9)
+                VideoFilterStage.parseColor(text)?.let { onChange(stage.with(key, VideoFilterChain.colorHex(it))) }
+            },
+            label = { Text(label) },
+            isError = !valid,
+            supportingText = { if (!valid) Text("Enter a hex color such as #FF00FF00.") },
+            singleLine = true,
+            modifier = Modifier.weight(1f).showImeOnFocus()
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .size(40.dp)
+                .background(Color(stage.color(key)), RoundedCornerShape(6.dp))
+                .clickable { picking = true }
+        )
+    }
+    if (picking) {
+        ColorPickerDialog(
+            initialColor = stage.color(key),
+            onDismiss = { picking = false },
+            onColorSelected = { color -> onChange(stage.with(key, VideoFilterChain.colorHex(color))); picking = false }
+        )
+    }
+}
+
+private fun uniqueName(base: String, stages: List<VideoFilterStage>): String {
+    if (stages.none { it.name == base }) return base
+    var n = 2
+    while (stages.any { it.name == "$base $n" }) n++
+    return "$base $n"
 }
 
 private fun number(value: Float): String = String.format(Locale.US, "%.2f", value)

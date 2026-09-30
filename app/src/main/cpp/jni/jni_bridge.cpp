@@ -35,7 +35,16 @@ extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_re
 extern "C" JNIEXPORT jboolean JNICALL Java_com_stream4k60_app_engine_NativeEngine_updateSourceRgba(JNIEnv*e,jclass,jstring id,jbyteArray data,jint w,jint h){if(!data)return JNI_FALSE;jsize n=e->GetArrayLength(data);std::vector<uint8_t>buf((size_t)n);e->GetByteArrayRegion(data,0,n,reinterpret_cast<jbyte*>(buf.data()));return g.updateRgba(jstr(e,id),buf.data(),buf.size(),w,h);}
 extern "C" JNIEXPORT jboolean JNICALL Java_com_stream4k60_app_engine_NativeEngine_updateSourceYuvDirect(JNIEnv*e,jclass,jstring id,jobject frame,jint w,jint h,jint fmt){if(!frame)return JNI_FALSE;void*p=e->GetDirectBufferAddress(frame);jlong n=e->GetDirectBufferCapacity(frame);if(!p||n<=0)return JNI_FALSE;auto f=static_cast<stream4k60::RawPixelFormat>(fmt);return g.updateRaw(jstr(e,id),reinterpret_cast<const uint8_t*>(p),(size_t)n,w,h,f);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSourceTextureParameters(JNIEnv*e,jclass,jstring id,jfloat x,jfloat y,jfloat w,jfloat h,jfloat px,jfloat py,jfloat r,jfloat sx,jfloat sy,jfloat op,jfloat cl,jfloat ct,jfloat cr,jfloat cb,jboolean v,jint z,jboolean fh,jboolean fv){g.updateLayer(jstr(e,id),x,y,w,h,px,py,r,sx,sy,op,cl,ct,cr,cb,v,z,fh,fv);}
-extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSourceEffects(JNIEnv*e,jclass,jstring id,jfloat br,jfloat co,jfloat sa,jfloat ga,jfloat hue,jboolean key,jfloat kr,jfloat kg,jfloat kb,jfloat sim,jfloat smooth){g.updateEffects(jstr(e,id),br,co,sa,ga,hue,key,kr,kg,kb,sim,smooth);}
+extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSourceFilterChain(JNIEnv*e,jclass,jstring id,jintArray types,jfloatArray params){
+    const jsize count=types?e->GetArrayLength(types):0;
+    const jsize paramCount=params?e->GetArrayLength(params):0;
+    std::vector<jint> t((size_t)count);
+    std::vector<jfloat> p((size_t)paramCount);
+    if(count>0)e->GetIntArrayRegion(types,0,count,t.data());
+    if(paramCount>0)e->GetFloatArrayRegion(params,0,paramCount,p.data());
+    static_assert(sizeof(jint)==sizeof(int)&&sizeof(jfloat)==sizeof(float));
+    g.updateFilterChain(jstr(e,id),reinterpret_cast<const int*>(t.data()),(int)count,p.data(),(int)paramCount);
+}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_removeSourceLayer(JNIEnv*e,jclass,jstring id){g.releaseSource(jstr(e,id),e);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setTransition(JNIEnv*,jclass,jint type,jint duration){g.setTransition(type,duration);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setTransitionProgress(JNIEnv*,jclass,jfloat p){g.setTransitionProgress(p);}

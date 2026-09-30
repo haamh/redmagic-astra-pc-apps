@@ -10,6 +10,15 @@ The user wants an Android-native OBS-equivalent studio, with OBS project/profile
 
 The latest user direction is to optimize specifically for the Astra and use external UVC webcams/capture cards and their audio. The Astra's built-in camera, screen recording/capture and virtual-camera output are not required. Desktop display-capture sources in OBS imports must remain preserved but inactive. ADB previously detected the connected tablet as `NP05J` / `PQ84P01-EEA`, Android 15 (API 35). Finish implementation and review before installing; the app is not installed/launched.
 
+## Checkpoint 2026-09-30 (Claude Code session, Linux build)
+
+- Repository is now on GitHub (`haamh/redmagic-astra-pc-apps`) with a `.gitignore` excluding `.gradle/`, `.kotlin/` and build outputs.
+- **Ordered video filter chain implemented.** Sources store `settings.videoFilters` (ordered array of `{id,type,name,enabled,settings}`); legacy `effects` objects are read and converted. Stage types: `COLOR_CORRECTION`, `CHROMA_KEY`, `COLOR_KEY`, `LUMA_KEY`. `NativeEngine.setSourceFilterChain` sends up to 8 enabled stages (16 floats each) to the compositor, which runs them in order in the layer fragment shader. `FilterEditorScreen` adds/removes/reorders/enables stages with a live preview; Cancel restores the saved chain.
+- OBS import maps color correction, chroma key, color key and luma key filters (v1 and v2) in OBS order, including repeated and disabled filters. Fixed two import bugs: OBS gamma was applied inverted, and OBS integer colors (0xAABBGGRR) were read with red and blue swapped (affected key colors, color sources and text colors).
+- Removed the unreferenced placeholder `VideoFilters.kt` / `AudioFilters.kt` composables.
+- Added JVM unit tests (`app/src/test`, `./gradlew :app:testDebugUnitTest`): 8 tests for filter-chain storage, legacy migration and native packing, all passing. The compositor GLSL passes `glslangValidator` as ES 3.20.
+- `:app:assembleDebug` succeeds on Linux (Android SDK platform 35, build-tools 34, NDK 27.0.12077973, CMake 3.22.1). Still not installed or run on the Astra.
+
 ## Latest verification
 
 Set `ANDROID_HOME` to `C:\Users\haamh\AppData\Local\Android\Sdk` for Gradle. The latest `:app:assembleDebug` succeeded on 2026-09-29 with the source-properties, USB-decoder and import-scope changes. It proves compilation/packaging only. No app install, launch or Astra runtime check was performed. No `local.properties` was added.
@@ -114,4 +123,4 @@ $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 .\gradlew.bat :app:assembleDebug
 ```
 
-The directory is an unpacked workspace and has no `.git` metadata at its root; do not rely on Git status/diffs without first verifying repository metadata.
+The project is tracked in Git on GitHub (`haamh/redmagic-astra-pc-apps`). Build caches and APKs are ignored by `.gitignore`.
