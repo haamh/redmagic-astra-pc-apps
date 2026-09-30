@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="obs_background">#FF181825</color>
+    <color name="obs_surface">#FF1E1E2E</color>
+    <color name="obs_surface_variant">#FF313244</color>
+    <color name="obs_primary">#FF89B4FA</color>
+    <color name="obs_secondary">#FFCBA6F7</color>
+    <color name="obs_tertiary">#FFF5C2E7</color>
+    <color name="obs_error">#FFF38BA8</color>
+    <color name="obs_live_green">#FFA6E3A1</color>
+    <color name="obs_recording_red">#FFF38BA8</color>
+    <color name="obs_warning_yellow">#FFF9E2AF</color>
+    <color name="obs_text_primary">#FFCDD6F4</color>
+    <color name="obs_text_secondary">#FFA6ADC8</color>
+    <color name="obs_on_surface">#FFCDD6F4</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="black">#FF000000</color>
+</resources>

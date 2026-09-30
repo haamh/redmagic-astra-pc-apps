@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="streaming_services">
+        <item>Custom</item>
+        <item>Twitch</item>
+        <item>YouTube</item>
+        <item>Facebook Live</item>
+        <item>Kick</item>
+        <item>TikTok</item>
+        <item>Instagram</item>
+    </string-array>
+    
+    <string-array name="video_resolutions">
+        <item>3840x2160 (4K)</item>
+        <item>2560x1440 (1440p)</item>
+        <item>1920x1080 (1080p)</item>
+        <item>1280x720 (720p)</item>
+        <item>854x480 (480p)</item>
+    </string-array>
+    
+    <string-array name="fps_values">
+        <item>30</item>
+        <item>60</item>
+        <item>120</item>
+    </string-array>
+    
+    <string-array name="recording_formats">
+        <item>MKV</item>
+        <item>MP4</item>
+        <item>FLV</item>
+        <item>MOV</item>
+        <item>TS</item>
+    </string-array>
+    
+    <string-array name="audio_bitrates">
+        <item>64</item>
+        <item>96</item>
+        <item>128</item>
+        <item>160</item>
+        <item>192</item>
+        <item>256</item>
+        <item>320</item>
+    </string-array>
+    
+    <string-array name="sample_rates">
+        <item>44100</item>
+        <item>48000</item>
+    </string-array>
+    
+    <string-array name="downscale_filters">
+        <item>Bilinear (Fastest)</item>
+        <item>Bicubic (16 samples)</item>
+        <item>Lanczos (36 samples, sharpest)</item>
+        <item>Area (Best for downscaling)</item>
+    </string-array>
+    
+    <string-array name="color_formats">
+        <item>NV12</item>
+        <item>I420</item>
+        <item>I444</item>
+        <item>P010</item>
+        <item>I010</item>
+    </string-array>
+    
+    <string-array name="color_spaces">
+        <item>sRGB</item>
+        <item>Rec. 709</item>
+        <item>Rec. 2100 (PQ)</item>
+        <item>Rec. 2100 (HLG)</item>
+    </string-array>
+    
+    <string-array name="transition_types">
+        <item>Cut</item>
+        <item>Fade</item>
+        <item>Slide</item>
+        <item>Swipe</item>
+        <item>Fade to Color</item>
+        <item>Luma Wipe</item>
+        <item>Stinger</item>
+    </string-array>
+    
+    <string-array name="process_priorities">
+        <item>Normal</item>
+        <item>Above Normal</item>
+        <item>High</item>
+    </string-array>
+</resources>

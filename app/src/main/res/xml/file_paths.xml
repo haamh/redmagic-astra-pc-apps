@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <external-files-path name="recordings" path="recordings/"/>
+    <external-files-path name="screenshots" path="screenshots/"/>
+    <external-files-path name="replays" path="replays/"/>
+    <cache-path name="cache" path="."/>
+</paths>
