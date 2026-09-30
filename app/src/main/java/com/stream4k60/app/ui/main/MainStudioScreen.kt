@@ -37,7 +37,7 @@ fun MainStudioScreen(
     onOpenProfiles:()->Unit,
     vm:MainStudioViewModel=hiltViewModel()
 ){
-    val streaming by vm.streamState.collectAsState();val streamError by vm.streamError.collectAsState();val recording by vm.recordState.collectAsState();val studio by vm.isStudioModeEnabled.collectAsState();val selectedTransition by vm.selectedTransition.collectAsState();val scenes by vm.scenes.collectAsState();val sceneCollections by vm.sceneCollections.collectAsState();val activeCollectionId by vm.activeSceneCollectionId.collectAsState();val active by vm.activeScene.collectAsState();val sources by vm.sources.collectAsState();val sourceErrors by SourceRuntimeErrors.errors.collectAsState();val videoConfig by vm.videoConfig.collectAsState();val importedRtmpEndpoint by vm.importedRtmpEndpoint.collectAsState();var selectedSourceId by remember{mutableStateOf<String?>(null)};val canvasFocusRequester=remember{FocusRequester()};var search by remember{mutableStateOf(false)};var yt by remember{mutableStateOf(false)};var customRtmp by remember{mutableStateOf(false)};var addSource by remember{mutableStateOf(false)};var editingSource by remember{mutableStateOf<SourceItem?>(null)};var filteringSource by remember{mutableStateOf<SourceItem?>(null)}
+    val streaming by vm.streamState.collectAsState();val streamStats by vm.streamStats.collectAsState();val streamError by vm.streamError.collectAsState();val recording by vm.recordState.collectAsState();val studio by vm.isStudioModeEnabled.collectAsState();val selectedTransition by vm.selectedTransition.collectAsState();val scenes by vm.scenes.collectAsState();val sceneCollections by vm.sceneCollections.collectAsState();val activeCollectionId by vm.activeSceneCollectionId.collectAsState();val active by vm.activeScene.collectAsState();val sources by vm.sources.collectAsState();val sourceErrors by SourceRuntimeErrors.errors.collectAsState();val videoConfig by vm.videoConfig.collectAsState();val importedRtmpEndpoint by vm.importedRtmpEndpoint.collectAsState();var selectedSourceId by remember{mutableStateOf<String?>(null)};val canvasFocusRequester=remember{FocusRequester()};var search by remember{mutableStateOf(false)};var yt by remember{mutableStateOf(false)};var customRtmp by remember{mutableStateOf(false)};var addSource by remember{mutableStateOf(false)};var editingSource by remember{mutableStateOf<SourceItem?>(null)};var filteringSource by remember{mutableStateOf<SourceItem?>(null)}
     LaunchedEffect(active?.id) { selectedSourceId = null }
     val general by vm.generalSettings.collectAsState()
     var confirmStop by remember { mutableStateOf<String?>(null) }
@@ -188,7 +188,7 @@ fun MainStudioScreen(
             activeCollectionId = activeCollectionId,
             activeSceneId = active?.id,
             sources = sources,
-            isStreaming = streaming == StudioStreamState.LIVE,
+            isStreaming = (streaming == StudioStreamState.LIVE || streaming == StudioStreamState.RECONNECTING),
             isRecording = recording == StudioRecordState.RECORDING,
             isStudioMode = studio,
             thermalStatus = thermalStatus,
@@ -292,7 +292,7 @@ fun MainStudioScreen(
                         }
                         Dock("Controls", Modifier.width(m.controlsWidth).fillMaxHeight()) {
                             ControlsDockContent(
-                                isStreaming = streaming == StudioStreamState.LIVE,
+                                isStreaming = (streaming == StudioStreamState.LIVE || streaming == StudioStreamState.RECONNECTING),
                                 isStudioMode = studio,
                                 onStartStreaming = { vm.startStreaming() },
                                 onStopStreaming = { if (general.confirmStopStreaming) confirmStop = "streaming" else vm.stopStreaming() },
@@ -307,7 +307,9 @@ fun MainStudioScreen(
         StudioStatusBar(
             isStreaming = streaming == StudioStreamState.LIVE,
             targetFps = videoConfig.frameRate,
-            thermal = AstraDeviceMonitor.label(thermalStatus)
+            thermal = AstraDeviceMonitor.label(thermalStatus),
+            reconnecting = streaming == StudioStreamState.RECONNECTING,
+            bitrateBps = streamStats.bitrate
         )
     }
     confirmStop?.let { what ->

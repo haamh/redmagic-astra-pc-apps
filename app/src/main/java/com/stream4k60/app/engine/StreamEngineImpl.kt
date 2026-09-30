@@ -9,7 +9,12 @@ import com.stream4k60.app.service.StreamingService
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +32,43 @@ class StreamEngineImpl @Inject constructor(@ApplicationContext private val conte
     private val _replayBufferActive=MutableStateFlow(false);override val replayBufferActive:StateFlow<Boolean> = _replayBufferActive.asStateFlow()
     private var session:StreamOutputSession?=null
     private var activeStream:StreamConfig?=null
+    private val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+    private var statsJob:Job?=null
+
+    /** Publisher events after the stream went live: a dropped connection shows as RECONNECTING, giving up as ERROR. */
+    private fun onPublisherState(state:RtmpPublisher.State,message:String){
+        val live=_streamState.value==StreamState.LIVE||_streamState.value==StreamState.RECONNECTING
+        if(!live)return
+        when(state){
+            RtmpPublisher.State.CONNECTING->_streamState.value=StreamState.RECONNECTING
+            RtmpPublisher.State.PUBLISHING->_streamState.value=StreamState.LIVE
+            RtmpPublisher.State.ERROR->{
+                Timber.w("Stream ended: %s",message)
+                scope.launch{
+                    statsJob?.cancel()
+                    runCatching{session?.stop()};session=null;activeStream=null
+                    StreamingService.stop(context)
+                    _streamState.value=StreamState.ERROR
+                }
+            }
+            else->Unit
+        }
+    }
+
+    private fun startStats(){
+        statsJob?.cancel()
+        statsJob=scope.launch{
+            val started=System.currentTimeMillis()
+            var last=session?.encodedBytes()?:0L
+            while(isActive){
+                delay(1000)
+                val s=session?:break
+                val now=s.encodedBytes()
+                _streamStats.value=StreamStats(bitrate=(now-last)*8,duration=System.currentTimeMillis()-started,totalBytes=now)
+                last=now
+            }
+        }
+    }
 
     override suspend fun startStreaming(config:StreamConfig){
         require(config.service==StreamService.YOUTUBE || config.service==StreamService.CUSTOM){"This release supports YouTube and custom RTMP(S) destinations"}
@@ -40,7 +82,7 @@ class StreamEngineImpl @Inject constructor(@ApplicationContext private val conte
         withContext(Dispatchers.IO){
             runCatching{
                 val s=session
-                if(s==null){session=StreamOutputSession(context);session!!.prepareAndStart(config)} else error("An output session is already running; stop the existing stream/recording before changing the encoder format")
+                if(s==null){session=StreamOutputSession(context,::onPublisherState);session!!.prepareAndStart(config)} else error("An output session is already running; stop the existing stream/recording before changing the encoder format")
                 check(session!!.awaitPublisherReady(if(config.protocol==StreamProtocol.HLS)15_000 else 20_000)){"YouTube ingestion did not become ready"}
                 val token=YouTubeAuthSession.accessToken
                 if(config.service==StreamService.YOUTUBE&&!config.broadcastId.isNullOrBlank()&&token!=null){
@@ -57,7 +99,7 @@ class StreamEngineImpl @Inject constructor(@ApplicationContext private val conte
                     }
                     yt.transitionBroadcast(config.broadcastId,"live")
                 }
-                activeStream=config;_streamState.value=StreamState.LIVE
+                activeStream=config;_streamState.value=StreamState.LIVE;startStats()
             }.onFailure{
                 Timber.e(it,"Stream start failed");session?.stop();session=null;activeStream=null;StreamingService.stop(context);_streamState.value=StreamState.ERROR;throw it
             }
@@ -66,6 +108,7 @@ class StreamEngineImpl @Inject constructor(@ApplicationContext private val conte
 
     override suspend fun stopStreaming(){
         _streamState.value=StreamState.STOPPING
+        statsJob?.cancel();_streamStats.value=StreamStats()
         withContext(Dispatchers.IO){
             val id=activeStream?.broadcastId
             val s=session

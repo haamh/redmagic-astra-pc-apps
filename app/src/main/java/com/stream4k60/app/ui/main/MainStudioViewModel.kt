@@ -77,6 +77,10 @@ enum class StudioRecordState{IDLE,RECORDING,PAUSED,STOPPING,ERROR}
  init {
   // Global audio devices/levels and push-to-talk changes re-sync the native mixer.
   viewModelScope.launch { audioSettingsState.drop(1).collect { syncAudioGraph() } }
+  // A live stream that ends on its own (reconnect gave up) explains why instead of silently going idle.
+  viewModelScope.launch { var prev=StreamState.IDLE; engine.streamState.collect { st ->
+   if(st==StreamState.ERROR&&(prev==StreamState.LIVE||prev==StreamState.RECONNECTING)) _streamError.value="Connection to the streaming server was lost and reconnecting failed. Check your internet, then start streaming again."
+   prev=st } }
   viewModelScope.launch { settingsRepository.hotkeys.collect { HotkeyDispatcher.setBindings(it ?: HotkeyDispatcher.defaultBindings) } }
   viewModelScope.launch {
    ImportSelection.requestedCollectionId.filterNotNull().collect { id ->
@@ -209,6 +213,7 @@ enum class StudioRecordState{IDLE,RECORDING,PAUSED,STOPPING,ERROR}
  }
  fun setStreamConfig(c:StreamConfig){_streamConfig.value=c}
  fun dismissStreamError(){_streamError.value=null}
+ val streamStats=engine.streamStats
  fun setRecordConfig(c:RecordingConfig){_recordConfig.value=c}
   fun addScene(name:String){viewModelScope.launch{val c=repo.collections().first().firstOrNull{it.id==_activeSceneCollectionId.value}?:return@launch;val current=repo.loadScenes(c.id);val id=UUID.randomUUID().toString();repo.saveScene(SceneEntity(id,c.id,name.ifBlank{"Scene ${current.size+1}"},current.size,false));load(c)}}
   fun removeScene(){viewModelScope.launch{val a=_activeScene.value?:return@launch;val c=repo.collections().first().firstOrNull{it.id==_activeSceneCollectionId.value}?:return@launch;val all=repo.loadScenes(c.id);if(all.size>1){val next=all.first{it.id!=a.id};repo.loadScenes(c.id).forEach{row->if(row.id==next.id)repo.saveScene(row.copy(active=true)) else if(row.active)repo.saveScene(row.copy(active=false))};repo.saveCollection(c.copy(activeSceneId=next.id));load(c.copy(activeSceneId=next.id))}}}

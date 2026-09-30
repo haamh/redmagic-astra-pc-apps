@@ -146,12 +146,13 @@ fun ControlsDockContent(
 
 /** OBS's status bar: LIVE timer, FPS and render time from the compositor, thermal state. */
 @Composable
-fun StudioStatusBar(isStreaming: Boolean, targetFps: Int, thermal: String, modifier: Modifier = Modifier) {
+fun StudioStatusBar(isStreaming: Boolean, targetFps: Int, thermal: String, modifier: Modifier = Modifier, reconnecting: Boolean = false, bitrateBps: Long = 0) {
     var liveSeconds by remember { mutableLongStateOf(0L) }
     var fps by remember { mutableFloatStateOf(0f) }
     var renderMs by remember { mutableFloatStateOf(0f) }
     var dropped by remember { mutableIntStateOf(0) }
-    LaunchedEffect(isStreaming) { liveSeconds = 0; while (isStreaming) { delay(1000); liveSeconds++ } }
+    val onAir = isStreaming || reconnecting
+    LaunchedEffect(onAir) { if (onAir) { while (true) { delay(1000); liveSeconds++ } } else liveSeconds = 0 }
     LaunchedEffect(Unit) {
         var lastFrames = runCatching { NativeEngine.getTotalFrames() }.getOrDefault(0L)
         val droppedAtStart = runCatching { NativeEngine.getDroppedFrames() }.getOrDefault(0L)
@@ -171,7 +172,9 @@ fun StudioStatusBar(isStreaming: Boolean, targetFps: Int, thermal: String, modif
     ) {
         Text("Thermal: $thermal", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.weight(1f))
-        StatusDot(isStreaming); Text("LIVE ${clock(liveSeconds)}", fontSize = 11.sp)
+        if (reconnecting) Text("Reconnecting…", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+        StatusDot(isStreaming || reconnecting); Text("LIVE ${clock(liveSeconds)}", fontSize = 11.sp)
+        if (isStreaming || reconnecting) Text("${bitrateBps / 1000} kb/s", fontSize = 11.sp)
         Text(String.format(Locale.US, "Render %.1f ms", renderMs), fontSize = 11.sp)
         Text("Dropped $dropped", fontSize = 11.sp)
         Text(String.format(Locale.US, "%.2f / %d FPS", fps, targetFps), fontSize = 11.sp)

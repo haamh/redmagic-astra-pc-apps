@@ -7,7 +7,11 @@ import com.stream4k60.app.data.model.*
 import java.util.concurrent.atomic.AtomicLong
 
 /** One hardware encoder session. Exactly one stream target and/or one recorder can consume its encoded samples. */
-class StreamOutputSession(private val context: Context){
+class StreamOutputSession(
+    private val context: Context,
+    /** RTMP connection changes (connecting, publishing, reconnecting, gave up), called on the publisher's threads. */
+    private val onPublisherState: (RtmpPublisher.State, String) -> Unit = { _, _ -> }
+){
     data class Stats(val bytesSent:Long=0, val encodedFrames:Long=0, val bitrate:Long=0, val droppedFrames:Long=0)
     @Volatile var stats=Stats(); private set
     private var encoder:HardwareVideoEncoder?=null
@@ -21,6 +25,8 @@ class StreamOutputSession(private val context: Context){
     private var lastAudioFormat:MediaFormat?=null
     private var replayEnabled=false
     private val bytes=AtomicLong(); private val frames=AtomicLong()
+    /** Encoded video bytes so far; the engine samples it once a second for the live bitrate. */
+    fun encodedBytes()=bytes.get()
 
     suspend fun prepareAndStart(config:StreamConfig):Surface = prepare(config, null)
 
@@ -69,7 +75,7 @@ class StreamOutputSession(private val context: Context){
         } else {
             when(config.protocol){
                 StreamProtocol.HLS -> hls=YouTubeHlsPublisher(config.ingestionUrl).also{it.start(mime)}
-                StreamProtocol.RTMP, StreamProtocol.RTMPS -> rtmp=RtmpPublisher{_,_->}.also{ok -> ok.configureReconnect(config.autoReconnect,config.reconnectDelayMs,config.maxReconnectAttempts);check(ok.start(config.ingestionUrl,config.streamName,config.protocol==StreamProtocol.RTMPS,config.outputWidth,config.outputHeight,config.fps,config.outputCodec)) { "RTMP(S) publisher could not start" }}
+                StreamProtocol.RTMP, StreamProtocol.RTMPS -> rtmp=RtmpPublisher{st,msg->onPublisherState(st,msg)}.also{ok -> ok.configureReconnect(config.autoReconnect,config.reconnectDelayMs,config.maxReconnectAttempts);check(ok.start(config.ingestionUrl,config.streamName,config.protocol==StreamProtocol.RTMPS,config.outputWidth,config.outputHeight,config.fps,config.outputCodec)) { "RTMP(S) publisher could not start" }}
                 else -> error("Unsupported output protocol: ${config.protocol}")
             }
         }
