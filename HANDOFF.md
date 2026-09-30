@@ -1,8 +1,67 @@
 # Stream4k60 implementation handoff
 
-**Checkpoint:** 2026-09-29  
-**Workspace:** `C:\Users\haamh\Downloads\Stream4k-gpt\stream4k_release_candidate`  
-**State:** Astra-targeted development in progress; not ready for Astra testing.
+**Checkpoint:** 2026-09-30 (streaming-studio pass)  
+**Repository:** `haamh/redmagic-astra-pc-apps`, branch `main` (work branch `claude/relaxed-lamport-zzejhc`)  
+**State:** Installed and being tested on the Astra. Launch crashes are fixed; the Insta360 camera and an audio input still show errors on the device.
+
+## START HERE (latest, 2026-09-30)
+
+### Direction from the user (most recent first)
+- **Streaming only.** Recording and the replay buffer are removed from the UI; their engine code is left in place, unused.
+- Match OBS's layout and behaviour (the user compares against OBS screenshots). Every feature: simple controls first, the rest under "Advanced" with explanations.
+- Every page/dialog must have an X close button (shared `ui/common/ClosableTitle.kt`).
+- All commits must be authored and committed as `haamh <haamthelord@gmail.com>` with no co-author or tool trailers.
+
+### Build, install, debug (the user's Windows PC, PowerShell)
+```
+git pull origin main
+.\gradlew.bat :app:assembleDebug
+adb install -r app\build\outputs\apk\debug\app-debug.apk
+adb logcat -s Stream4k60 AndroidRuntime
+adb shell cat /sdcard/Android/data/com.stream4k60.app/files/source-errors.txt
+adb shell cat /sdcard/Android/data/com.stream4k60.app/files/last-crash.txt
+adb shell cat /sdcard/Android/data/com.stream4k60.app/files/native-crash.txt
+```
+- Debug builds are signed with the checked-in `app/stream4k60-debug.keystore` (SHA-1 `07:88:C4:F1:2C:7B:D5:90:70:AB:6C:EB:98:3D:DF:FB:1B:E1:17:E9`), so every machine produces installable updates and Google sign-in keeps working. The first install after this change needed one `adb uninstall com.stream4k60.app`.
+- Linux/cloud: `ANDROID_HOME=/opt/android-sdk ./gradlew :app:assembleDebug :app:testDebugUnitTest`; after native changes run `app/src/test/native/run_compositor_test.sh` (Mesa).
+- The APK is ~76 MB. Build outputs are not committed.
+
+### Open problems (do these next)
+1. **Insta360 stays black** with every format over direct USB. USB camera sources now have a **Driver** option (`engine/UsbCameraRouting.kt`): Automatic uses Android's Camera2 driver when the camera is listed as `LENS_FACING_EXTERNAL`, otherwise direct UVC. Waiting on the user to say (a) whether Properties reports Android listing a USB camera and (b) the full error text (now visible in Properties / `source-errors.txt`). If Android does not list it, debug the UVC path (`engine/UvcCaptureSession.kt`, `cpp/usb/uvc_iso_stream.cpp`, `uvc_bulk_stream.cpp`) using that error.
+2. **Audio input error** (the user's audio input source): full message not yet received. Only the UVC streaming interface is claimed, so the camera path should not steal the Insta360 mic. Errors come from `MainStudioViewModel` `syncAudioGraph`/`audioRoutes`.
+3. The mixer's two meter bars show the same level: the engine reports one peak per source. Mono and the audio track checkboxes are not implemented.
+4. YouTube: the app can pick existing scheduled broadcasts but cannot create one (OBS "Manage Broadcast → Create"). The access token lives in memory only; it is restored silently when the picker opens.
+
+### What exists now (this pass)
+- **Layout (OBS):** Scenes/Sources docks on the left, preview, source toolbar, Audio Mixer / Scene Transitions / Controls docks, and a status bar. Every dock split is draggable (`ui/main/components/DockLayout.kt`, saved in SharedPreferences `studio_layout`; double-tap a bar to reset it).
+- **Preview:** `PreviewViewport.kt` offers Scale to window / Canvas / Output, plus zoom and pan:
+  - Ctrl+wheel or a pinch on empty space zooms.
+  - The wheel, middle-button drag or a two-finger drag pans.
+  - Gestures that start on a source still edit the source.
+  - The preview is a **TextureView** (`NativePreviewSurface.kt`) so zoom is clipped; screenshots use `TextureView.getBitmap`.
+- **Audio mixer (`AudioMixerPanel.kt`):**
+  - Channels are laid out vertically with horizontal scroll, or horizontally; switchable.
+  - Each channel has a Global/Active badge, a cubic dB fader, a meter with a peak hold, and mute and monitor buttons.
+  - The channel menu has Hide, Lock volume, Rename, Filters, Properties and Advanced Audio Properties.
+  - Hidden/locked state is stored in source config (`mixerHidden`, `volumeLocked`).
+- **Global audio:** Desktop Audio (`global:desktop`, playback capture) and Mic/Aux (`global:mic`) exist in every scene. They are configured in Settings → Audio and their mixer/filter state is stored in `AudioSettings.desktopConfig/micConfig`.
+- **Settings:** real pages for Stream, Output, Audio, Advanced, Hotkeys and Accessibility. Settings are stored as JSON sections in the active profile via `SettingsRepository`.
+  - **Stream:** service/server/key.
+  - **Output:** bitrate number field plus a recommended value per service.
+  - **Audio:** devices, monitoring, push-to-talk/mute and delay.
+  - **Advanced:** auto-reconnect.
+  - **Hotkeys:** full rebinding with conflict detection (`HotkeyDispatcher`).
+  - **Accessibility:** UI scale, applied in `MainActivity`.
+- **Streaming:**
+  - YouTube, Twitch, Facebook, Kick and custom RTMP(S) all work; previously only YouTube and Custom passed the engine check.
+  - Platform services are capped at 60 FPS.
+  - Reconnect is surfaced as RECONNECTING, and the live bitrate shows in the status bar.
+  - The YouTube picker is "Manage Broadcast" in Controls.
+- **Source errors:**
+  - `SourceRuntimeErrors` logs errors to logcat and `source-errors.txt`.
+  - The Sources list shows two lines; tapping shows the full text.
+  - Properties shows the full error, a live solo preview of the source (native `setSoloPreview`, `GlCompositor::renderSolo`), and a level meter for audio inputs.
+- **YouTube sign-in** needs the Google Cloud project the user created: YouTube Data API v3, an OAuth consent screen with test users, and an Android OAuth client with package `com.stream4k60.app` and the SHA-1 above.
 
 ## User direction
 
