@@ -23,8 +23,11 @@ class YouTubeBroadcastPickerViewModel @Inject constructor(
     settingsRepository: SettingsRepository
 ) : ViewModel() {
     private val manager = YouTubeAccountManager()
-    private val _connected = MutableStateFlow(false)
-    val connected: StateFlow<Boolean> = _connected.asStateFlow()
+    val connected: StateFlow<Boolean> = manager.connected
+    private val _loading = MutableStateFlow(false)
+    val loading: StateFlow<Boolean> = _loading.asStateFlow()
+    private val _loadError = MutableStateFlow<String?>(null)
+    val loadError: StateFlow<String?> = _loadError.asStateFlow()
     private val _broadcasts = MutableStateFlow<List<YouTubeBroadcast>>(emptyList())
     val broadcasts: StateFlow<List<YouTubeBroadcast>> = _broadcasts.asStateFlow()
     private val _videoConfig = MutableStateFlow(VideoConfig())
@@ -49,10 +52,21 @@ class YouTubeBroadcastPickerViewModel @Inject constructor(
         manager.handleAuthorizationResult(activity, intent, onDone)
     }
 
+    /** On open: reuse an earlier Google grant silently, then fetch the broadcasts. */
+    fun restoreAndLoad(activity: Activity) {
+        viewModelScope.launch { if (connected.value || manager.restore(activity)) load() }
+    }
+
+    fun disconnect() { manager.disconnect(); _broadcasts.value = emptyList(); _loadError.value = null }
+
     fun load() {
         viewModelScope.launch {
+            _loading.value = true; _loadError.value = null
             runCatching { manager.service().listBroadcasts() }
-                .onSuccess { _broadcasts.value = it }
+                // Finished and revoked broadcasts can't be streamed to; upcoming ones first.
+                .onSuccess { list -> _broadcasts.value = list.filter { it.lifeCycle !in setOf("complete", "revoked") } }
+                .onFailure { _loadError.value = "Couldn't load your broadcasts: ${it.message}" }
+            _loading.value = false
         }
     }
 

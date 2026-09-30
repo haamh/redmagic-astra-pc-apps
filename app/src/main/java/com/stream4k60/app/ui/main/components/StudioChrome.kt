@@ -135,9 +135,12 @@ fun ControlsDockContent(
     onStartStreaming: () -> Unit,
     onStopStreaming: () -> Unit,
     onToggleStudio: () -> Unit,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    onManageBroadcast: () -> Unit = {},
+    broadcastTitle: String? = null
 ) {
     Column(Modifier.fillMaxSize().padding(6.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        ObsButton(broadcastTitle?.let { "Broadcast: $it" } ?: "Manage Broadcast", onManageBroadcast)
         ObsButton(if (isStreaming) "Stop Streaming" else "Start Streaming", if (isStreaming) onStopStreaming else onStartStreaming, active = isStreaming)
         ObsButton("Studio Mode", onToggleStudio, active = isStudioMode)
         ObsButton("Settings", onSettings)

@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.main
 
+import androidx.compose.runtime.saveable.rememberSaveable
+
 import com.stream4k60.app.data.model.HotkeyAction
 import androidx.compose.runtime.rememberUpdatedState
 import com.stream4k60.app.ui.dialogs.ConfirmStopDialog
@@ -37,7 +39,7 @@ fun MainStudioScreen(
     onOpenProfiles:()->Unit,
     vm:MainStudioViewModel=hiltViewModel()
 ){
-    val streaming by vm.streamState.collectAsState();val streamStats by vm.streamStats.collectAsState();val streamError by vm.streamError.collectAsState();val recording by vm.recordState.collectAsState();val studio by vm.isStudioModeEnabled.collectAsState();val selectedTransition by vm.selectedTransition.collectAsState();val scenes by vm.scenes.collectAsState();val sceneCollections by vm.sceneCollections.collectAsState();val activeCollectionId by vm.activeSceneCollectionId.collectAsState();val active by vm.activeScene.collectAsState();val sources by vm.sources.collectAsState();val sourceErrors by SourceRuntimeErrors.errors.collectAsState();val videoConfig by vm.videoConfig.collectAsState();val importedRtmpEndpoint by vm.importedRtmpEndpoint.collectAsState();var selectedSourceId by remember{mutableStateOf<String?>(null)};val canvasFocusRequester=remember{FocusRequester()};var search by remember{mutableStateOf(false)};var yt by remember{mutableStateOf(false)};var customRtmp by remember{mutableStateOf(false)};var addSource by remember{mutableStateOf(false)};var editingSource by remember{mutableStateOf<SourceItem?>(null)};var filteringSource by remember{mutableStateOf<SourceItem?>(null)}
+    val streaming by vm.streamState.collectAsState();val streamStats by vm.streamStats.collectAsState();val streamError by vm.streamError.collectAsState();val recording by vm.recordState.collectAsState();val studio by vm.isStudioModeEnabled.collectAsState();val selectedTransition by vm.selectedTransition.collectAsState();val scenes by vm.scenes.collectAsState();val sceneCollections by vm.sceneCollections.collectAsState();val activeCollectionId by vm.activeSceneCollectionId.collectAsState();val active by vm.activeScene.collectAsState();val sources by vm.sources.collectAsState();val sourceErrors by SourceRuntimeErrors.errors.collectAsState();val videoConfig by vm.videoConfig.collectAsState();val importedRtmpEndpoint by vm.importedRtmpEndpoint.collectAsState();var selectedSourceId by remember{mutableStateOf<String?>(null)};val canvasFocusRequester=remember{FocusRequester()};var search by remember{mutableStateOf(false)};var yt by remember{mutableStateOf(false)};var customRtmp by remember{mutableStateOf(false)};var addSource by remember{mutableStateOf(false)};var editingSource by remember{mutableStateOf<SourceItem?>(null)};var filteringSource by remember{mutableStateOf<SourceItem?>(null)};var broadcastTitle by rememberSaveable{mutableStateOf<String?>(null)}
     LaunchedEffect(active?.id) { selectedSourceId = null }
     val general by vm.generalSettings.collectAsState()
     var confirmStop by remember { mutableStateOf<String?>(null) }
@@ -297,7 +299,9 @@ fun MainStudioScreen(
                                 onStartStreaming = { vm.startStreaming() },
                                 onStopStreaming = { if (general.confirmStopStreaming) confirmStop = "streaming" else vm.stopStreaming() },
                                 onToggleStudio = { vm.toggleStudioMode() },
-                                onSettings = { onOpenSettings("General") }
+                                onSettings = { onOpenSettings("General") },
+                                onManageBroadcast = { yt = true },
+                                broadcastTitle = broadcastTitle
                             )
                         }
                     }
@@ -357,7 +361,7 @@ fun MainStudioScreen(
         confirmButton = { Button(onClick = { requestProjectionPermission() }) { Text("Try again") } },
         dismissButton = { TextButton(onClick = { showProjectionRetryDialog = false }) { Text("Later") } }
     )
-    if(yt)YouTubeBroadcastPicker({vm.setStreamConfig(it);yt=false},{yt=false})
+    if(yt)YouTubeBroadcastPicker({cfg,title->vm.setStreamConfig(cfg);broadcastTitle=title;yt=false},{yt=false})
     if(customRtmp)CustomRtmpDialog(videoConfig,importedRtmpEndpoint,{vm.setStreamConfig(it);customRtmp=false},{customRtmp=false})
     streamError?.let { message ->
         AlertDialog(onDismissRequest = vm::dismissStreamError, title = { Text("Streaming could not start") }, text = { Text(message) }, confirmButton = { TextButton(onClick = vm::dismissStreamError) { Text("OK") } })

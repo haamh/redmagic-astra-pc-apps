@@ -15,10 +15,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
 class YouTubeAccountManager : ViewModel(){
-    private val _connected=MutableStateFlow(false);val connected:StateFlow<Boolean> = _connected.asStateFlow();private val _token=MutableStateFlow<String?>(null);val token:StateFlow<String?> = _token.asStateFlow()
+    // Starts from the process-wide session so a sign-in done earlier in this run still counts.
+    private val _connected=MutableStateFlow(!YouTubeAuthSession.accessToken.isNullOrBlank());val connected:StateFlow<Boolean> = _connected.asStateFlow();private val _token=MutableStateFlow(YouTubeAuthSession.accessToken);val token:StateFlow<String?> = _token.asStateFlow()
     private val requested= listOf(Scope("https://www.googleapis.com/auth/youtube.force-ssl"))
     suspend fun authorize(activity:Activity,onResolution:(IntentSenderRequest)->Unit,onDone:(Boolean,String?)->Unit){runCatching{val req=AuthorizationRequest.builder().setRequestedScopes(requested).build();val result=Identity.getAuthorizationClient(activity).authorize(req).await();if(result.hasResolution())onResolution(IntentSenderRequest.Builder(result.pendingIntent!!.intentSender).build())else{_token.value=result.accessToken;YouTubeAuthSession.accessToken=result.accessToken;_connected.value=!result.accessToken.isNullOrBlank();onDone(_connected.value,null)}}.onFailure{onDone(false,explain(it))}}
     fun handleAuthorizationResult(activity:Activity,intent:Intent?,onDone:(Boolean,String?)->Unit){runCatching{val result=Identity.getAuthorizationClient(activity).getAuthorizationResultFromIntent(intent);_token.value=result.accessToken;YouTubeAuthSession.accessToken=result.accessToken;_connected.value=!result.accessToken.isNullOrBlank();onDone(_connected.value,null)}.onFailure{onDone(false,explain(it))}}
+    /**
+     * Google remembers an account that already granted access: this gets a fresh token without showing anything.
+     * Returns false when the user has to sign in (first time, or access was revoked).
+     */
+    suspend fun restore(activity:Activity):Boolean=runCatching{
+        val result=Identity.getAuthorizationClient(activity).authorize(AuthorizationRequest.builder().setRequestedScopes(requested).build()).await()
+        if(result.hasResolution())false else{_token.value=result.accessToken;YouTubeAuthSession.accessToken=result.accessToken;_connected.value=!result.accessToken.isNullOrBlank();_connected.value}
+    }.getOrDefault(false)
+    fun disconnect(){_token.value=null;YouTubeAuthSession.accessToken=null;_connected.value=false}
     fun service()=YouTubeService{suspendToken()}
     private suspend fun suspendToken()=_token.value
     /** Google's errors are codes; say what to do instead. */
