@@ -209,14 +209,25 @@ fun MainStudioScreen(
         )
         // OBS layout: Scenes/Sources docks down the left; preview, source toolbar and the
         // Audio Mixer / Scene Transitions / Controls docks on the right; status bar below.
+        val dock = rememberDockSizes()
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
             val m = studioLayoutMetrics(maxWidth, maxHeight)
+            val areaWidth = maxWidth.value
+            val areaHeight = maxHeight.value
+            val leftWidth = dock.leftWidth.orDefault(m.leftWidth)
+            val bottomHeight = dock.bottomHeight.orDefault(m.bottomHeight)
+            val transitionsWidth = dock.transitionsWidth.orDefault(m.transitionsWidth)
+            val controlsWidth = dock.controlsWidth.orDefault(m.controlsWidth)
             Row(Modifier.fillMaxSize()) {
-                Column(Modifier.width(m.leftWidth).fillMaxHeight()) {
-                    Dock("Scenes", Modifier.weight(1f).fillMaxWidth()) {
+                Column(Modifier.width(leftWidth).fillMaxHeight()) {
+                    val scenesFraction = dock.scenesFraction.coerceIn(0.15f, 0.85f)
+                    Dock("Scenes", Modifier.weight(scenesFraction).fillMaxWidth()) {
                         ScenePanel(scenes,active?.id,{vm.setActiveScene(it)},{vm.addScene("Scene ${scenes.size+1}")},{vm.removeScene()},Modifier.fillMaxSize(),showHeader=false)
                     }
-                    Dock("Sources", Modifier.weight(1f).fillMaxWidth()) {
+                    DockSplitter(false, { d -> dock.scenesFraction = (dock.scenesFraction + d / areaHeight).coerceIn(0.15f, 0.85f) }, dock::save) {
+                        dock.scenesFraction = 0.5f; dock.save()
+                    }
+                    Dock("Sources", Modifier.weight(1f - scenesFraction).fillMaxWidth()) {
                         SourcePanel(
                             sources = sources,
                             sourceErrors = sourceErrors,
@@ -246,13 +257,17 @@ fun MainStudioScreen(
                         )
                     }
                 }
+                DockSplitter(true, { d -> dock.leftWidth = (leftWidth.value + d).coerceIn(150f, areaWidth * 0.45f) }, dock::save) {
+                    dock.leftWidth = 0f; dock.save()
+                }
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     Row(Modifier.fillMaxWidth().weight(1f).background(MaterialTheme.colorScheme.background).padding(6.dp)) {
-                        BoxWithConstraints(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                            val aspect = videoConfig.baseResWidth.toFloat() / videoConfig.baseResHeight.coerceAtLeast(1)
-                            val canvasWidth = minOf(maxWidth, maxHeight * aspect)
-                            val canvasHeight = canvasWidth / aspect
-                            Box(Modifier.size(canvasWidth, canvasHeight).background(Color.Black)) {
+                        PreviewViewport(
+                            videoConfig.baseResWidth, videoConfig.baseResHeight,
+                            videoConfig.outputResWidth, videoConfig.outputResHeight,
+                            Modifier.weight(1f).fillMaxHeight()
+                        ) { canvasModifier ->
+                            Box(canvasModifier.background(Color.Black)) {
                                 EditablePreview(
                                     sources,
                                     selectedSourceId,
@@ -285,17 +300,26 @@ fun MainStudioScreen(
                         onProperties = { editable(selectedSourceId)?.let { editingSource = it } },
                         onFilters = { editable(selectedSourceId)?.let { filteringSource = it } }
                     )
-                    Row(Modifier.fillMaxWidth().height(m.bottomHeight)) {
+                    DockSplitter(false, { d -> dock.bottomHeight = (bottomHeight.value - d).coerceIn(110f, areaHeight * 0.7f) }, dock::save) {
+                        dock.bottomHeight = 0f; dock.save()
+                    }
+                    Row(Modifier.fillMaxWidth().height(bottomHeight)) {
                         Dock("Audio Mixer", Modifier.weight(1f).fillMaxHeight()) {
                             AudioMixerPanel(audioItems, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.fillMaxSize(), showHeader = false, onFilters = { filteringSource = it },
                                 // Desktop Audio / Mic/Aux are configured in Settings → Audio, like OBS's global devices.
                                 onProperties = { src -> if (src.id.startsWith("global:")) onOpenSettings("Audio") else editable(src.id)?.let { editingSource = it } },
                                 onRename = { src, name -> vm.renameSource(src.id, name) })
                         }
-                        Dock("Scene Transitions", Modifier.width(m.transitionsWidth).fillMaxHeight()) {
+                        DockSplitter(true, { d -> dock.transitionsWidth = (transitionsWidth.value - d).coerceIn(120f, areaWidth * 0.35f) }, dock::save) {
+                            dock.transitionsWidth = 0f; dock.save()
+                        }
+                        Dock("Scene Transitions", Modifier.width(transitionsWidth).fillMaxHeight()) {
                             TransitionsDockContent(selectedTransition, vm::selectTransition, studio) { active?.id?.let { vm.setActiveScene(it) } }
                         }
-                        Dock("Controls", Modifier.width(m.controlsWidth).fillMaxHeight()) {
+                        DockSplitter(true, { d -> dock.controlsWidth = (controlsWidth.value - d).coerceIn(140f, areaWidth * 0.35f) }, dock::save) {
+                            dock.controlsWidth = 0f; dock.save()
+                        }
+                        Dock("Controls", Modifier.width(controlsWidth).fillMaxHeight()) {
                             ControlsDockContent(
                                 isStreaming = (streaming == StudioStreamState.LIVE || streaming == StudioStreamState.RECONNECTING),
                                 isStudioMode = studio,
