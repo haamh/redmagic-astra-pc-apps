@@ -50,7 +50,13 @@ class UvcCaptureSession(
     private var isoHandle: Long = 0
     private var bulkHandle: Long = 0
     private data class CompressedFrame(val data: ByteArray, val ptsUs: Long)
-    private val decodeQueue = ArrayBlockingQueue<CompressedFrame>(4)
+    private val decodeQueue = ArrayBlockingQueue<CompressedFrame>(64)
+    /** H.264/HEVC frames depend on earlier ones: after any loss, wait for the next keyframe. */
+    @Volatile private var needKeyframe = true
+    private var parameterSets: ByteArray? = null
+    @Volatile private var decodedCount = 0L
+    @Volatile private var lastDecodeError: String? = null
+    private var watchdog: Thread? = null
     private var decodeThread: Thread? = null
     private var frameErrors = 0L
     private var frameCount = 0L
@@ -124,8 +130,35 @@ class UvcCaptureSession(
             runCatching { NativeEngine.releaseSourceSurface(sourceId) }
             throw t
         }
+        startWatchdog()
         return surface!!
     }
+
+    /**
+     * Says where the video stops when the preview stays black: nothing from USB, data that doesn't decode, or a
+     * decoder error. Clears the message once pictures come out.
+     */
+    private fun startWatchdog(){
+        watchdog=Thread({
+            var lastFrames=0L;var lastDecoded=0L
+            try{
+                Thread.sleep(4000)
+                while(running.get()){
+                    val frames=frameCount;val decoded=if(softwareJpeg)frames-frameErrors else decodedCount
+                    val fmt=selectedFormat?.let{"${it.width}x${it.height}@${it.fps} ${it.codec}"}.orEmpty()
+                    val msg=when{
+                        frames==lastFrames->"The camera accepted $fmt but sent no video over USB in the last few seconds (${transportLabel()}, ${frameErrors} packet errors). Try another format or USB port."
+                        !softwareJpeg&&decoded==lastDecoded->"Receiving $fmt from the camera (${frames} frames) but the decoder produced no picture${lastDecodeError?.let{": $it"}?:""}."
+                        else->null
+                    }
+                    if(msg!=null)SourceRuntimeErrors.report(sourceId,msg) else SourceRuntimeErrors.clear(sourceId)
+                    lastFrames=frames;lastDecoded=decoded
+                    Thread.sleep(3000)
+                }
+            }catch(_:InterruptedException){}
+        },"Stream4k-UVCWatch").apply{isDaemon=true;start()}
+    }
+    private fun transportLabel()=if(isoHandle!=0L)"isochronous" else if(bulkHandle!=0L)"bulk" else "no transfer"
 
     /** Called synchronously by native usbfs from the URB completion thread. */
     @Suppress("UNUSED_PARAMETER")
@@ -142,7 +175,14 @@ class UvcCaptureSession(
                 val src = buffer.duplicate()
                 val bytes = ByteArray(src.remaining())
                 src.get(bytes)
-                while (!decodeQueue.offer(CompressedFrame(bytes, ptsUs))) decodeQueue.poll()
+                if (format.codec.uppercase() == "MJPEG") {
+                    // Every MJPEG frame stands alone: keep only the newest.
+                    while (decodeQueue.size >= 2) decodeQueue.poll()
+                    decodeQueue.offer(CompressedFrame(bytes, ptsUs))
+                } else if (!decodeQueue.offer(CompressedFrame(bytes, ptsUs))) {
+                    // Decoder fell behind: dropping part of an H.264 stream corrupts it, so restart at a keyframe.
+                    decodeQueue.clear(); needKeyframe = true
+                }
             }
         }
     }
@@ -153,6 +193,7 @@ class UvcCaptureSession(
         if (h != 0L) runCatching { NativeUsbIso.stop(h) }
         val b = bulkHandle; bulkHandle = 0L
         if (b != 0L) runCatching { NativeUsbBulk.stop(b) }
+        watchdog?.interrupt(); watchdog = null
         decodeThread?.interrupt()
         runCatching { decodeThread?.join(500) }
         decodeThread = null
@@ -252,7 +293,13 @@ class UvcCaptureSession(
     private fun decodeLoop(){
         while(running.get() && !Thread.currentThread().isInterrupted){
             val frame=runCatching{decodeQueue.poll(20,TimeUnit.MILLISECONDS)}.getOrNull() ?: continue
-            if(softwareJpeg)decodeJpeg(frame.data) else feedDecoder(ByteBuffer.wrap(frame.data),frame.ptsUs)
+            try{
+                if(softwareJpeg)decodeJpeg(frame.data)
+                else{val prepared=prepareCompressed(frame.data)?:continue;feedDecoder(ByteBuffer.wrap(prepared),frame.ptsUs)}
+            }catch(t:Throwable){
+                if(t is InterruptedException)return
+                lastDecodeError="${t.javaClass.simpleName}: ${t.message}";android.util.Log.w("Stream4k60","UVC decode failed",t)
+            }
         }
     }
 
@@ -273,10 +320,47 @@ class UvcCaptureSession(
         try{canvas.drawBitmap(bmp,null,android.graphics.Rect(0,0,canvas.width,canvas.height),null)}finally{runCatching{target.unlockCanvasAndPost(canvas)}}
     }
 
+    /**
+     * H.264/HEVC: remembers the camera's parameter sets (SPS/PPS, and VPS for HEVC), adds them to keyframes that
+     * lack them, and skips frames until the first keyframe so the decoder always starts from a complete picture.
+     */
+    private fun prepareCompressed(data:ByteArray):ByteArray?{
+        val hevc=selectedFormat?.codec?.uppercase().let{it=="HEVC"||it=="H265"}
+        var hasParams=false;var keyframe=false
+        val params=java.io.ByteArrayOutputStream()
+        forEachNal(data){start,end,header->
+            val type=if(hevc)(header shr 1) and 0x3F else header and 0x1F
+            val isParam=if(hevc)type in 32..34 else type==7||type==8
+            if(isParam){hasParams=true;params.write(byteArrayOf(0,0,0,1));params.write(data,start,end-start)}
+            if(if(hevc)type in 16..21 else type==5)keyframe=true
+        }
+        if(hasParams)parameterSets=params.toByteArray()
+        if(needKeyframe){
+            if(!keyframe||parameterSets==null){lastDecodeError=if(parameterSets==null)"Waiting for the camera's stream setup (SPS/PPS)" else "Waiting for a keyframe";return null}
+            needKeyframe=false
+        }
+        val ps=parameterSets
+        return if(keyframe&&!hasParams&&ps!=null)ps+data else data
+    }
+
+    /** Calls [block] with (start of NAL payload, end, first payload byte) for each Annex-B NAL unit. */
+    private inline fun forEachNal(d:ByteArray,block:(Int,Int,Int)->Unit){
+        var i=0;var nalStart=-1
+        while(i+3<=d.size){
+            val sc=if(d[i]==0.toByte()&&d[i+1]==0.toByte()&&d[i+2]==1.toByte())3 else if(i+4<=d.size&&d[i]==0.toByte()&&d[i+1]==0.toByte()&&d[i+2]==0.toByte()&&d[i+3]==1.toByte())4 else 0
+            if(sc>0){
+                if(nalStart>=0&&nalStart<i)block(nalStart,i,d[nalStart].toInt() and 0xFF)
+                nalStart=i+sc;i+=sc
+            }else i++
+        }
+        if(nalStart in 0 until d.size)block(nalStart,d.size,d[nalStart].toInt() and 0xFF)
+    }
+
     private fun feedDecoder(frame:ByteBuffer,ptsUs:Long){
         val c=decoder?:return
-        val inIndex=c.dequeueInputBuffer(2_000)
-        if(inIndex<0)return
+        var inIndex=c.dequeueInputBuffer(20_000)
+        if(inIndex<0){drain(c);inIndex=c.dequeueInputBuffer(40_000)}
+        if(inIndex<0){needKeyframe=true;lastDecodeError="The hardware decoder stopped accepting frames";return}
         val src=frame.duplicate()
         val size=src.remaining()
         val dst=c.getInputBuffer(inIndex)?:return
@@ -292,7 +376,7 @@ class UvcCaptureSession(
         while(true){
             val out=codec.dequeueOutputBuffer(info,0)
             when{
-                out>=0->codec.releaseOutputBuffer(out,true)
+                out>=0->{codec.releaseOutputBuffer(out,true);decodedCount++;lastDecodeError=null}
                 out==MediaCodec.INFO_OUTPUT_FORMAT_CHANGED->{
                     // Surface output is already attached to the compositor-owned SurfaceTexture.
                 }
@@ -369,6 +453,16 @@ class UvcCaptureSession(
                         0x06->{formatIndex=bytes.getOrZero(i+3);codec="MJPEG"}
                         0x04->{formatIndex=bytes.getOrZero(i+3);codec=guidFourcc(bytes,i+5)}
                         0x10->{formatIndex=bytes.getOrZero(i+3);codec=guidFourcc(bytes,i+5).ifBlank{"H264"}}
+                        // UVC 1.5 H.264 (VS_FORMAT_H264 / VS_FRAME_H264), used by newer webcams such as the Insta360 Link.
+                        0x13->{formatIndex=bytes.getOrZero(i+3);codec="H264"}
+                        0x14->if(formatIndex>0&&len>=44){
+                            // wWidth@4, wHeight@6, dwDefaultFrameInterval@39, bNumFrameIntervals@43, intervals @44.
+                            val frameIndex=bytes.getOrZero(i+3);val w=u16(bytes,i+4);val h=u16(bytes,i+6)
+                            val maxFrame=(w*h*2L).toInt().coerceAtLeast(256*1024)
+                            val count=bytes.getOrZero(i+43)
+                            val intervals=if(count==0)listOf(u32(bytes,i+39)) else List(count.coerceAtMost(32)){n->u32(bytes,i+44+n*4)}
+                            intervals.filter{it>0&&i+44<=bytes.size}.forEach{interval->result+=Format(formatIndex,frameIndex,w,h,(10_000_000/interval).toInt().coerceAtLeast(1),codec,maxFrame)}
+                        }
                         0x07,0x05,0x11->{
                             if(formatIndex>0&&len>=26){
                                 // MJPEG/uncompressed: dwMaxVideoFrameBufferSize@17, bFrameIntervalType@25.

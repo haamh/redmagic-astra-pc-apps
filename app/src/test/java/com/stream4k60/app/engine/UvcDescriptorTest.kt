@@ -29,6 +29,18 @@ class UvcDescriptorTest {
         assertEquals(listOf(3840, 2160, 30), listOf(h264.width, h264.height, h264.fps))
     }
 
+    // UVC 1.5 H.264: VS_FORMAT_H264 (0x13) and VS_FRAME_H264 (0x14), width at offset 4, intervals from 44.
+    private fun uvc15H264Format(index: Int) = bytes(52, 0x24, 0x13, index, 1) + List(47) { 0.toByte() }
+    private fun uvc15H264Frame(frame: Int, w: Int, h: Int, vararg fps: Int) =
+        bytes(44 + fps.size * 4, 0x24, 0x14, frame) + u16(w) + u16(h) + List(31) { 0.toByte() } + u32(10_000_000 / fps[0]) + bytes(fps.size) + fps.flatMap { u32(10_000_000 / it) }
+
+    @Test
+    fun parsesUvc15H264() {
+        val d = (interfaceDesc(2) + uvc15H264Format(1) + uvc15H264Frame(1, 1920, 1080, 60, 30) + uvc15H264Frame(2, 3840, 2160, 30)).toByteArray()
+        val formats = UvcCaptureSession.parseFormats(d).filter { it.codec == "H264" }
+        assertEquals(setOf(Triple(1920, 1080, 60), Triple(1920, 1080, 30), Triple(3840, 2160, 30)), formats.map { Triple(it.width, it.height, it.fps) }.toSet())
+    }
+
     @Test
     fun probeLengthFollowsUvcVersion() {
         assertEquals(26, UvcCaptureSession.probeLength((interfaceDesc(1) + vcHeader(0x0100)).toByteArray()))

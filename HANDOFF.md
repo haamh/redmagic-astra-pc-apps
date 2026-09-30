@@ -33,6 +33,14 @@ adb shell cat /sdcard/Android/data/com.stream4k60.app/files/native-crash.txt
    - MJPEG now falls back to software decoding (`UvcCaptureSession.decodeJpeg`): BitmapFactory (libjpeg-turbo) decodes into a reused bitmap, which is drawn into the source surface with `lockHardwareCanvas`. Only the newest frame is decoded.
    - `MjpegFrames.withHuffmanTables` inserts the standard JPEG DHT tables that UVC webcams omit. The table bytes were checked with a real decoder: a table-stripped JPEG with the tables re-inserted decodes pixel-identical.
    - Still untested on the device. Watch the achieved FPS at 1080p60; if it's too slow, add a second decode thread or a native libjpeg-turbo path.
+   - **H.264 (latest, untested on the device).** The user confirmed the Insta360 lists H.264 modes but still shows black when they are selected. Changes made:
+     - Parse UVC 1.5 H.264 descriptors (VS_FORMAT_H264 0x13 / VS_FRAME_H264 0x14), with a unit test.
+     - H.264/HEVC frames are no longer dropped: the queue holds 64 frames, and an overflow waits for the next keyframe.
+     - SPS/PPS (and VPS) are cached and prepended to keyframes that lack them; frames before the first keyframe are skipped (`prepareCompressed`).
+     - The decoder input wait is longer, and decode exceptions are caught.
+     - A **watchdog** reports every 3 s where the video stops: "no video over USB", "receiving N frames but the decoder produced no picture: <reason>", or "waiting for SPS/PPS / keyframe". **Get that message from the user next** (Properties banner or `source-errors.txt`).
+   - If the watchdog says "waiting for SPS/PPS" forever, the camera likely needs UVC 1.5 encoding-unit controls to send an IDR, or a different probe for H.264 (bUsage etc. in the 48-byte probe).
+   - If it says "no video over USB", suspect the alternate-setting/endpoint choice or the probe/commit values (`negotiate`, `chooseEndpoint`).
    - **Missing webcams:** USB permission requests were fired for all devices at once and Android dropped all but one. They are now queued one at a time, and USB source Properties has a **Rescan USB devices** button.
 2. **Audio input error** (the user's audio input source): full message not yet received. Only the UVC streaming interface is claimed, so the camera path should not steal the Insta360 mic. Errors come from `MainStudioViewModel` `syncAudioGraph`/`audioRoutes`.
 3. The mixer's two meter bars show the same level: the engine reports one peak per source. Mono and the audio track checkboxes are not implemented.
