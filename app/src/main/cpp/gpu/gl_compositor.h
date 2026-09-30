@@ -68,6 +68,8 @@ public:
     bool updateRaw(const std::string& id,const uint8_t* pixels,size_t bytes,int width,int height,RawPixelFormat format);
     bool setPreviewSurface(JNIEnv* env,jobject surface);
     bool setEncoderSurface(JNIEnv* env,jobject surface);
+    // A second, small output that shows one source on its own (the Properties preview). Empty id or null surface turns it off.
+    bool setSoloPreview(JNIEnv* env,const std::string& id,jobject surface);
     bool start(); void stop();
     void setCanvas(uint32_t w,uint32_t h){canvasW_.store(w);canvasH_.store(h);}
     void setVideoSettings(uint32_t w,uint32_t h,int fps){if(w>0&&h>0){canvasW_.store(w);canvasH_.store(h);}if(fps>0)fps_.store(std::clamp(fps,1,240));}
@@ -96,6 +98,9 @@ private:
     std::atomic<int> fps_{60};
     EGLSurface preview_=EGL_NO_SURFACE,encoder_=EGL_NO_SURFACE;
     ANativeWindow* previewWin_=nullptr,*encoderWin_=nullptr;
+    EGLSurface solo_=EGL_NO_SURFACE;
+    ANativeWindow* soloWin_=nullptr;
+    std::string soloId_;
     std::map<std::string,Source> sources_;
     std::map<std::string,SourceLayer> pendingFilters_;
     struct Lut {
@@ -124,6 +129,7 @@ private:
     void renderSceneTargets(const std::vector<SourceLayer>& layers);
     void drawLayers(const std::vector<SourceLayer>& layers,const std::string& owner,int canvasWidth,int canvasHeight,bool toOffscreen);
     void renderTo(EGLSurface target,int width,int height,int canvasWidth,int canvasHeight,const std::vector<SourceLayer>& layers);
+    void renderSolo(const std::vector<SourceLayer>& layers);
     void destroyWindow(EGLSurface& s,ANativeWindow*& w);
     Source* source(const std::string&id);
     void applyPendingFilters(SourceLayer& layer,const std::string&id);

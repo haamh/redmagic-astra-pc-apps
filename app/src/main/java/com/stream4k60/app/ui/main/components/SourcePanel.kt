@@ -89,6 +89,7 @@ fun SourcePanel(
     var contextMenuSourceId by remember { mutableStateOf<String?>(null) }
     var copiedTransform by remember { mutableStateOf<String?>(null) }
     var renameTarget by remember { mutableStateOf<SourceItem?>(null) }
+    var errorDetail by remember { mutableStateOf<Pair<String, String>?>(null) }
     var renameValue by remember { mutableStateOf("") }
     var collapsedGroups by remember { mutableStateOf(emptySet<String>()) }
     val groups = sources.filter { it.type.equals("GROUP", true) }
@@ -163,7 +164,12 @@ fun SourcePanel(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(source.name, fontSize = 13.sp, maxLines = 1)
                         val sourceError = sourceErrors[source.id]
-                        Text(sourceError ?: source.type, fontSize = 9.sp, color = if(sourceError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                        if (sourceError != null) {
+                            // Tap for the whole message; Properties shows it too.
+                            Text("⚠ $sourceError", fontSize = 9.sp, color = MaterialTheme.colorScheme.error, maxLines = 2,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.clickable { errorDetail = source.name to sourceError })
+                        } else Text(source.type, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                     }
                     Box {
                         IconButton(onClick = { contextMenuSourceId = source.id }, modifier = Modifier.size(24.dp)) {
@@ -315,6 +321,14 @@ fun SourcePanel(
                 Icon(Icons.Default.ArrowDownward, "Move source backward", modifier = Modifier.size(15.dp))
             }
         }
+    }
+    errorDetail?.let { (name, message) ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { errorDetail = null },
+            title = { ClosableTitle("$name: problem", { errorDetail = null }) },
+            text = { androidx.compose.foundation.text.selection.SelectionContainer { Text(message) } },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { errorDetail = null }) { Text("OK") } }
+        )
     }
     renameTarget?.let { source ->
         AlertDialog(

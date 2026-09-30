@@ -114,6 +114,7 @@ layout(location=0)in vec2 aPos;out vec2 v;void main(){v=aPos;gl_Position=vec4(aP
 precision highp float;uniform vec4 uColor;out vec4 frag;void main(){frag=uColor;}
 )GLSL";auto compileLocal=[](GLenum t,const char*src)->GLuint{GLuint x=glCreateShader(t);glShaderSource(x,1,&src,nullptr);glCompileShader(x);GLint ok=0;glGetShaderiv(x,GL_COMPILE_STATUS,&ok);if(!ok){glDeleteShader(x);return 0;}return x;};GLuint ov=compileLocal(GL_VERTEX_SHADER,ovs),of=compileLocal(GL_FRAGMENT_SHADER,ofs);if(!ov||!of){if(ov)glDeleteShader(ov);if(of)glDeleteShader(of);return false;}overlayProgram_=glCreateProgram();glAttachShader(overlayProgram_,ov);glAttachShader(overlayProgram_,of);glLinkProgram(overlayProgram_);GLint ol=0;glGetProgramiv(overlayProgram_,GL_LINK_STATUS,&ol);glDeleteShader(ov);glDeleteShader(of);if(!ol)return false;const float q[]={-1,-1,0,1,1,-1,1,1,-1,1,0,0,1,1,1,0};glGenVertexArrays(1,&vao_);glGenBuffers(1,&vbo_);glBindVertexArray(vao_);glBindBuffer(GL_ARRAY_BUFFER,vbo_);glBufferData(GL_ARRAY_BUFFER,sizeof(q),q,GL_STATIC_DRAW);glEnableVertexAttribArray(0);glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)0);glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)(2*sizeof(float)));glBindVertexArray(0);return true;}
 void GlCompositor::destroyWindow(EGLSurface&s,ANativeWindow*&w){if(s!=EGL_NO_SURFACE){eglDestroySurface(egl_.display(),s);s=EGL_NO_SURFACE;}if(w){ANativeWindow_release(w);w=nullptr;}}
+bool GlCompositor::setSoloPreview(JNIEnv* env,const std::string& id,jobject js){std::lock_guard<std::mutex>lk(m_);destroyWindow(solo_,soloWin_);soloId_=js?id:std::string();if(!js||id.empty())return true;soloWin_=ANativeWindow_fromSurface(env,js);if(!soloWin_)return false;solo_=egl_.createWindowSurface(soloWin_);return solo_!=EGL_NO_SURFACE;}
 bool GlCompositor::setPreviewSurface(JNIEnv* env,jobject js){std::lock_guard<std::mutex>lk(m_);destroyWindow(preview_,previewWin_);if(!js)return true;previewWin_=ANativeWindow_fromSurface(env,js);if(!previewWin_)return false;preview_=egl_.createWindowSurface(previewWin_);return preview_!=EGL_NO_SURFACE;}
 bool GlCompositor::setEncoderSurface(JNIEnv* env,jobject js){std::lock_guard<std::mutex>lk(m_);destroyWindow(encoder_,encoderWin_);if(!js)return true;encoderWin_=ANativeWindow_fromSurface(env,js);if(!encoderWin_)return false;encoder_=egl_.createWindowSurface(encoderWin_);return encoder_!=EGL_NO_SURFACE;}
 void GlCompositor::bindSurfaceTexture(Source&s,JNIEnv*env){if(!s.surfaceTexture)return;jclass c=env->GetObjectClass(s.surfaceTexture);s.updateTex=env->GetMethodID(c,"updateTexImage","()V");s.getMatrix=env->GetMethodID(c,"getTransformMatrix","([F)V");jfloatArray a=(jfloatArray)env->NewFloatArray(16);s.matrixArray=env->NewGlobalRef(a);env->DeleteLocalRef(a);}
@@ -405,6 +406,34 @@ void GlCompositor::renderTo(EGLSurface target,int width,int height,int canvasWid
     eglSwapBuffers(egl_.display(),target);
 }
 
+// Draws one source, filters and crop included, letterboxed into the solo surface; position, rotation and opacity
+// on the canvas are ignored so the preview shows the source itself.
+void GlCompositor::renderSolo(const std::vector<SourceLayer>& layers){
+    std::string id;
+    {std::lock_guard<std::mutex> lk(m_);if(solo_==EGL_NO_SURFACE||!soloWin_)return;id=soloId_;}
+    const int sw=ANativeWindow_getWidth(soloWin_),sh=ANativeWindow_getHeight(soloWin_);
+    if(sw<=0||sh<=0)return;
+    std::vector<SourceLayer> one;
+    for(const auto& l:layers)if(l.id==id){one.push_back(l);break;}
+    eglMakeCurrent(egl_.display(),solo_,solo_,egl_.context());
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
+    glViewport(0,0,sw,sh);
+    glClearColor(0.08f,0.08f,0.1f,1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if(!one.empty()){
+        SourceLayer& l=one.front();
+        // The layer rect is already the displayed (cropped) size; crop only picks the texture area.
+        const float cw=std::max(1.f,std::abs(l.w*l.scaleX)),ch=std::max(1.f,std::abs(l.h*l.scaleY));
+        const float fit=std::min(sw/cw,sh/ch);
+        const float dw=cw*fit,dh=ch*fit;
+        l.w=dw;l.h=dh;
+        l.scaleX=1;l.scaleY=1;l.rotation=0;l.pivotX=0;l.pivotY=0;l.opacity=1;l.visible=true;l.owner.clear();
+        l.x=(sw-dw)/2.f;l.y=(sh-dh)/2.f;
+        drawLayers(one,std::string(),sw,sh,false);
+    }
+    eglSwapBuffers(egl_.display(),solo_);
+}
+
 void GlCompositor::loop(){
     JNIEnv* env=nullptr;
     if(vm_->AttachCurrentThread(&env,nullptr)!=JNI_OK)return;
@@ -438,6 +467,7 @@ void GlCompositor::loop(){
             if(encoder_!=EGL_NO_SURFACE&&encoderWin_){
                 renderTo(encoder_,ANativeWindow_getWidth(encoderWin_),ANativeWindow_getHeight(encoderWin_),canvasWidth,canvasHeight,layers);
             }
+            renderSolo(layers);
         }
         const auto frameEnd=std::chrono::steady_clock::now();
         renderMs_.store(std::chrono::duration<float,std::milli>(frameEnd-frameStart).count());
@@ -463,5 +493,5 @@ void GlCompositor::loop(){
     vm_->DetachCurrentThread();
 }bool GlCompositor::start(){if(running_.exchange(true))return true;thread_=std::thread(&GlCompositor::loop,this);return true;}
 void GlCompositor::stop(){if(!running_.exchange(false))return;if(thread_.joinable())thread_.join();}
-void GlCompositor::shutdown(){stop();if(egl_.display()!=EGL_NO_DISPLAY){eglMakeCurrent(egl_.display(),egl_.surface(),egl_.surface(),egl_.context());for(auto&kv:sources_){auto&s=kv.second;if(s.layer.textureId)glDeleteTextures(1,&s.layer.textureId);if(s.layer.auxTextureId)glDeleteTextures(1,&s.layer.auxTextureId);}sources_.clear();for(auto&l:luts_)if(l.second.texture)glDeleteTextures(1,&l.second.texture);luts_.clear();for(auto&t:sceneTargets_){if(t.second.fbo)glDeleteFramebuffers(1,&t.second.fbo);if(t.second.texture)glDeleteTextures(1,&t.second.texture);}sceneTargets_.clear();for(GLuint t:lutTexturesToDelete_)glDeleteTextures(1,&t);lutTexturesToDelete_.clear();if(program_)glDeleteProgram(program_),program_=0;if(overlayProgram_)glDeleteProgram(overlayProgram_),overlayProgram_=0;if(vbo_)glDeleteBuffers(1,&vbo_),vbo_=0;if(vao_)glDeleteVertexArrays(1,&vao_),vao_=0;}destroyWindow(preview_,previewWin_);destroyWindow(encoder_,encoderWin_);egl_.shutdown();}
+void GlCompositor::shutdown(){stop();if(egl_.display()!=EGL_NO_DISPLAY){eglMakeCurrent(egl_.display(),egl_.surface(),egl_.surface(),egl_.context());for(auto&kv:sources_){auto&s=kv.second;if(s.layer.textureId)glDeleteTextures(1,&s.layer.textureId);if(s.layer.auxTextureId)glDeleteTextures(1,&s.layer.auxTextureId);}sources_.clear();for(auto&l:luts_)if(l.second.texture)glDeleteTextures(1,&l.second.texture);luts_.clear();for(auto&t:sceneTargets_){if(t.second.fbo)glDeleteFramebuffers(1,&t.second.fbo);if(t.second.texture)glDeleteTextures(1,&t.second.texture);}sceneTargets_.clear();for(GLuint t:lutTexturesToDelete_)glDeleteTextures(1,&t);lutTexturesToDelete_.clear();if(program_)glDeleteProgram(program_),program_=0;if(overlayProgram_)glDeleteProgram(overlayProgram_),overlayProgram_=0;if(vbo_)glDeleteBuffers(1,&vbo_),vbo_=0;if(vao_)glDeleteVertexArrays(1,&vao_),vao_=0;}destroyWindow(preview_,previewWin_);destroyWindow(encoder_,encoderWin_);destroyWindow(solo_,soloWin_);egl_.shutdown();}
 }

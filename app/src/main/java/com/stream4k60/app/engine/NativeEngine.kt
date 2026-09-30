@@ -17,6 +17,8 @@ object NativeEngine {
     external fun setCanvasSize(width: Int, height: Int)
     external fun setVideoSettings(canvasWidth: Int, canvasHeight: Int, fps: Int)
     external fun setPreviewSurface(surface: Surface?): Boolean
+    /** Shows one source on its own in [surface] (the Properties preview); null id or surface turns it off. */
+    external fun setSoloPreview(sourceId: String?, surface: Surface?): Boolean
     external fun setEncoderSurface(surface: Surface?): Boolean
     external fun createSourceSurface(sourceId: String): Surface?
     external fun releaseSourceSurface(sourceId: String)

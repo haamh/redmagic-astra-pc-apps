@@ -45,6 +45,8 @@ fun SourcePropertiesDialog(
     usbManager: NativeUsbManager,
     onSave: (SourceItem) -> Unit,
     onRemapSource: (SourceItem, String) -> Unit = { _, _ -> },
+    runtimeError: String? = null,
+    peakProvider: (String) -> Float = { 0f },
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -164,6 +166,7 @@ fun SourcePropertiesDialog(
             Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
                 Text(sourceTypeDescription(type), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
+                SourceLivePreview(source, runtimeError, peakProvider)
                 if (configError != null || pickerError != null || invalidNumberFields.isNotEmpty()) {
                     Text(
                         pickerError ?: configError ?: "Enter valid numbers for: ${invalidNumberFields.joinToString()}",
@@ -354,6 +357,29 @@ fun SourcePropertiesDialog(
                     }
                     "USB_CAPTURE" -> {
                         val selected = usbVideo.firstOrNull { it.deviceId == int("deviceId", -1) }
+                        val externalCameras = remember { com.stream4k60.app.engine.UsbCameraRouting.externalCameraIds(context) }
+                        var driverMenu by remember { mutableStateOf(false) }
+                        val driverLabels = linkedMapOf(
+                            "AUTO" to "Automatic (recommended)",
+                            "ANDROID" to "Android camera driver",
+                            "USB" to "Direct USB (UVC)"
+                        )
+                        ExposedDropdownMenuBox(expanded = driverMenu, onExpandedChange = { driverMenu = !driverMenu }) {
+                            OutlinedTextField(
+                                value = driverLabels[str("driver", "AUTO")] ?: "Automatic (recommended)", onValueChange = {}, readOnly = true,
+                                label = { Text("Driver") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(driverMenu) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(expanded = driverMenu, onDismissRequest = { driverMenu = false }) {
+                                driverLabels.forEach { (id, label) -> DropdownMenuItem(text = { Text(label) }, onClick = { set("driver", id); driverMenu = false }) }
+                            }
+                        }
+                        Text(
+                            if (externalCameras.isEmpty()) "Android's camera service doesn't list any USB camera right now, so capture goes directly over USB."
+                            else "Android lists ${externalCameras.size} USB camera(s). Automatic uses Android's driver, which works with most webcams (including ones that stay black over direct USB). Pick Direct USB for capture cards or formats Android doesn't offer.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(6.dp))
                         val uvcControls by produceState(emptyList<com.stream4k60.app.engine.UvcVideoControl>(), selected?.deviceId) {
                             value = withContext(Dispatchers.IO) { selected?.let { usbManager.videoControls(it.deviceId) }.orEmpty() }
                         }

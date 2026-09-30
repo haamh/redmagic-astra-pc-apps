@@ -22,6 +22,7 @@ class Stream4k60App:Application(){
     override fun onCreate(){
         super.onCreate()
         CrashReporter.install(this)
+        com.stream4k60.app.engine.SourceRuntimeErrors.init(this)
         AstraDeviceMonitor.start(this)
         LutLibrary.initialize(this)
         if(BuildConfig.DEBUG)Timber.plant(Timber.DebugTree())

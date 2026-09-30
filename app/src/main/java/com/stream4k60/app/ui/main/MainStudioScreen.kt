@@ -108,7 +108,10 @@ fun MainStudioScreen(
     val captureSources = renderItems.map { it.copy(transformJson = "{}") }
     DisposableEffect(Unit){usb.initialize();browser.attachHost((ctx as Activity).findViewById(android.R.id.content) as ViewGroup);onDispose{camera.stopAll();bitmap.stop();media.stopAll();browser.stopAll();usb.shutdown();NativeEngine.setPreviewSurface(null)}}
     LaunchedEffect(captureSources,videoConfig,usbDevices,playbackIds){
-        camera.sync(renderItems);bitmap.sync(renderItems);media.sync(renderItems);browser.sync(renderItems)
+        // USB cameras that Android's own camera driver can read go through it; the rest use direct USB capture.
+        val externalCameras=com.stream4k60.app.engine.UsbCameraRouting.externalCameraIds(ctx)
+        val viaAndroid={it:SourceItem->com.stream4k60.app.engine.UsbCameraRouting.usesAndroidDriver(it,externalCameras)}
+        camera.sync(renderItems.map{if(viaAndroid(it))com.stream4k60.app.engine.UsbCameraRouting.asAndroidCamera(it,externalCameras) else it});bitmap.sync(renderItems);media.sync(renderItems);browser.sync(renderItems)
         if(screenIds.isEmpty() && !playback){
             com.stream4k60.app.service.ProjectionCaptureService.stop(ctx)
             projectionGrantedInSession=false
@@ -118,9 +121,9 @@ fun MainStudioScreen(
         } else if(!projectionGrantedInSession && !projectionDeniedForSources && !projectionRequested){
             requestProjectionPermission()
         }
-        val wantedUsb=renderItems.filter{it.type.equals("USB_CAPTURE",true)&&it.isVisible}.mapNotNull{sourceSettings(it.configJson).optInt("deviceId",-1).takeIf{v->v>=0}}.toSet()
+        val wantedUsb=renderItems.filter{it.type.equals("USB_CAPTURE",true)&&it.isVisible&&!viaAndroid(it)}.mapNotNull{sourceSettings(it.configJson).optInt("deviceId",-1).takeIf{v->v>=0}}.toSet()
         usbDevices.filter{it.isCapturing&&it.deviceId !in wantedUsb}.forEach{usb.stopCapture(it.deviceId)}
-        val visibleUsbSources=renderItems.filter{it.type.equals("USB_CAPTURE",true)&&it.isVisible}
+        val visibleUsbSources=renderItems.filter{it.type.equals("USB_CAPTURE",true)&&it.isVisible&&!viaAndroid(it)}
         val duplicateUsbIds=visibleUsbSources.map{sourceSettings(it.configJson).optInt("deviceId",-1)}.filter{it>=0}.groupingBy{it}.eachCount().filterValues{it>1}.keys
         duplicateUsbIds.filter{id->usbDevices.any{it.deviceId==id&&it.isCapturing}}.forEach{usb.stopCapture(it)}
         visibleUsbSources.filter{sourceSettings(it.configJson).optInt("deviceId",-1) in duplicateUsbIds}.forEach{src->
@@ -132,7 +135,8 @@ fun MainStudioScreen(
             else {
                 val w=c.optInt("width",3840);val h=c.optInt("height",2160);val fps=c.optInt("fps",60);val fmt=c.optString("format","MJPEG")
                 if(usb.startCapture(deviceId,w,h,fps,fmt,src.id,src.configJson))SourceRuntimeErrors.clear(src.id)
-                else SourceRuntimeErrors.report(src.id,"USB capture did not start: ${usb.lastError(deviceId)?:"check the selected format, USB permission and bandwidth"}")
+                else SourceRuntimeErrors.report(src.id,"USB capture did not start: ${usb.lastError(deviceId)?:"check the selected format, USB permission and bandwidth"}"+
+                    if(externalCameras.isEmpty())" (Android doesn't list this camera in its camera service, so only direct USB capture is possible.)" else " Try Driver: Android camera in Properties.")
             }
         }
     }
@@ -431,6 +435,8 @@ fun MainStudioScreen(
                 usbManager = usb,
                 onSave = { vm.updateSourceConfig(it.id, it.configJson); editingSource = null },
                 onRemapSource = { item, targetType -> vm.remapImportedSource(item.id, targetType); editingSource = null },
+                runtimeError = sourceErrors[source.id],
+                peakProvider = vm::audioPeak,
                 onDismiss = { editingSource = null }
             )
         }

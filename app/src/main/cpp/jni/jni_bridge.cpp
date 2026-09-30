@@ -28,6 +28,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_st
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setCanvasSize(JNIEnv*,jclass,jint w,jint h){g.setCanvas(w,h);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setVideoSettings(JNIEnv*,jclass,jint w,jint h,jint fps){g.setVideoSettings(static_cast<uint32_t>(w),static_cast<uint32_t>(h),fps);}
 extern "C" JNIEXPORT jboolean JNICALL Java_com_stream4k60_app_engine_NativeEngine_setPreviewSurface(JNIEnv*e,jclass,jobject s){return g.setPreviewSurface(e,s);}
+extern "C" JNIEXPORT jboolean JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSoloPreview(JNIEnv*e,jclass,jstring id,jobject s){std::string key;if(id){const char*c=e->GetStringUTFChars(id,nullptr);key=c;e->ReleaseStringUTFChars(id,c);}return g.setSoloPreview(e,key,s);}
 extern "C" JNIEXPORT jboolean JNICALL Java_com_stream4k60_app_engine_NativeEngine_setEncoderSurface(JNIEnv*e,jclass,jobject s){return g.setEncoderSurface(e,s);}
 extern "C" JNIEXPORT jobject JNICALL Java_com_stream4k60_app_engine_NativeEngine_createSourceSurface(JNIEnv*e,jclass,jstring id){jobject out=nullptr;return g.createSource(jstr(e,id),e,out)?out:nullptr;}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSourceBufferSize(JNIEnv*e,jclass,jstring id,jint w,jint h){g.setSourceBufferSize(jstr(e,id),w,h,e);}
