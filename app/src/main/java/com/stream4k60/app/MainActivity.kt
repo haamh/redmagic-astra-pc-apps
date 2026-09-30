@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         preferFastAstraPanelMode()
         enableEdgeToEdge()
+        useFullAstraScreen()
         
         requestPermissions()
         setContent {
@@ -49,6 +50,27 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * The studio is laid out for the Astra's whole 2400×1504 landscape panel: hide the status and navigation
+     * bars (swipe from an edge to show them briefly) and keep the screen on while streaming.
+     */
+    private fun useFullAstraScreen() {
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        }
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+            hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Dialogs and permission prompts can bring the bars back; hide them again.
+        if (hasFocus) useFullAstraScreen()
     }
 
     /** Ask Android for the fastest mode exposed by the Astra's internal panel. This is only

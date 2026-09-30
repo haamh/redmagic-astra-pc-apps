@@ -77,7 +77,8 @@ fun SourcePanel(
     groupChildren: Map<String, List<SourceItem>> = emptyMap(),
     onMoveIntoGroup: (String, String) -> Unit = { _, _ -> },
     onMoveOutOfGroup: (String) -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showHeader: Boolean = true
 ) {
     val listState = rememberLazyListState()
     var displayOrder by remember { mutableStateOf(sources.asReversed()) }
@@ -98,9 +99,11 @@ fun SourcePanel(
     LaunchedEffect(sources) {
         if (draggingSourceId == null) displayOrder = sources.asReversed()
     }
-    Column(modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
-        Text("Sources", fontSize = 12.sp, modifier = Modifier.fillMaxWidth().height(24.dp).padding(horizontal = 4.dp))
-        HorizontalDivider(thickness = 1.dp)
+    Column(modifier = modifier.background(MaterialTheme.colorScheme.surface)) {
+        if (showHeader) {
+            Text("Sources", fontSize = 12.sp, modifier = Modifier.fillMaxWidth().height(24.dp).padding(horizontal = 4.dp))
+            HorizontalDivider(thickness = 1.dp)
+        }
         LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
             // The top row is the front-most layer, matching OBS and the native compositor's z-order.
             items(rows, key = { it.first.id }) { (source, parentGroupId) ->
@@ -115,7 +118,7 @@ fun SourcePanel(
                                 alpha = .88f
                             }
                         }
-                        .background(if (source.id == selectedSourceId) MaterialTheme.colorScheme.primary.copy(alpha = .2f) else MaterialTheme.colorScheme.surfaceVariant)
+                        .background(if (source.id == selectedSourceId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
                         .pointerInput(source.id) {
                             awaitPointerEventScope {
                                 while (true) {

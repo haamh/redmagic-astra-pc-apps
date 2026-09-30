@@ -24,17 +24,20 @@ fun ScenePanel(
     onSelect: (String) -> Unit,
     onAdd: () -> Unit,
     onRemove: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showHeader: Boolean = true
 ) {
-    Column(modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
-        Text("Scenes", fontSize = 12.sp, modifier = Modifier.fillMaxWidth().height(24.dp).padding(horizontal = 4.dp), maxLines = 1)
-        HorizontalDivider(thickness = 1.dp)
+    Column(modifier = modifier.background(MaterialTheme.colorScheme.surface)) {
+        if (showHeader) {
+            Text("Scenes", fontSize = 12.sp, modifier = Modifier.fillMaxWidth().height(24.dp).padding(horizontal = 4.dp), maxLines = 1)
+            HorizontalDivider(thickness = 1.dp)
+        }
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(scenes, key = { it.id }) { scene ->
                 val active = scene.id == activeSceneId
                 Row(
                     modifier = Modifier.fillMaxWidth().height(28.dp)
-                        .background(if (active) MaterialTheme.colorScheme.primary.copy(alpha = .22f) else Color.Transparent)
+                        .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
                         .clickable { onSelect(scene.id) }.padding(horizontal = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) { Text(scene.name, fontSize = 13.sp, maxLines = 1) }

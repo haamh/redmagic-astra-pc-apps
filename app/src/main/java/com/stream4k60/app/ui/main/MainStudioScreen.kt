@@ -1,5 +1,6 @@
 package com.stream4k60.app.ui.main
 
+import com.stream4k60.app.ui.dialogs.ConfirmStopDialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import android.app.Activity
 import android.content.Context
@@ -36,6 +37,8 @@ fun MainStudioScreen(
 ){
     val streaming by vm.streamState.collectAsState();val streamError by vm.streamError.collectAsState();val recording by vm.recordState.collectAsState();val studio by vm.isStudioModeEnabled.collectAsState();val selectedTransition by vm.selectedTransition.collectAsState();val scenes by vm.scenes.collectAsState();val sceneCollections by vm.sceneCollections.collectAsState();val activeCollectionId by vm.activeSceneCollectionId.collectAsState();val active by vm.activeScene.collectAsState();val sources by vm.sources.collectAsState();val sourceErrors by SourceRuntimeErrors.errors.collectAsState();val videoConfig by vm.videoConfig.collectAsState();val importedRtmpEndpoint by vm.importedRtmpEndpoint.collectAsState();var selectedSourceId by remember{mutableStateOf<String?>(null)};val canvasFocusRequester=remember{FocusRequester()};var search by remember{mutableStateOf(false)};var yt by remember{mutableStateOf(false)};var customRtmp by remember{mutableStateOf(false)};var addSource by remember{mutableStateOf(false)};var editingSource by remember{mutableStateOf<SourceItem?>(null)};var filteringSource by remember{mutableStateOf<SourceItem?>(null)}
     LaunchedEffect(active?.id) { selectedSourceId = null }
+    val general by vm.generalSettings.collectAsState()
+    var confirmStop by remember { mutableStateOf<String?>(null) }
     // Everything the program shows, including the contents of nested scenes and groups.
     val renderSources by vm.renderSources.collectAsState()
     val renderItems = remember(renderSources) { renderSources.map { it.item } }
@@ -192,74 +195,122 @@ fun MainStudioScreen(
             onProfiles = onOpenProfiles,
             onSettings = { onOpenSettings("General") }
         )
-        Row(Modifier.fillMaxWidth().weight(1f)) {
-            BoxWithConstraints(
-                modifier = Modifier.weight(1f).fillMaxHeight().background(Color.Black),
-                contentAlignment = Alignment.Center
-            ) {
-                val aspect = videoConfig.baseResWidth.toFloat() / videoConfig.baseResHeight.coerceAtLeast(1)
-                val canvasWidth = minOf(maxWidth, maxHeight * aspect)
-                val canvasHeight = canvasWidth / aspect
-                Box(Modifier.size(canvasWidth, canvasHeight)) {
-                    EditablePreview(
-                        sources,
-                        selectedSourceId,
-                        videoConfig.baseResWidth,
-                        videoConfig.baseResHeight,
-                        { selectedSourceId = it },
-                        { id, transform -> vm.updateSourceTransform(id, transform) },
-                        vm::moveSourceInStack,
-                        canvasFocusRequester,
-                        Modifier.fillMaxSize()
-                    )
+        // OBS layout: Scenes/Sources docks down the left; preview, source toolbar and the
+        // Audio Mixer / Scene Transitions / Controls docks on the right; status bar below.
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            val m = studioLayoutMetrics(maxWidth, maxHeight)
+            Row(Modifier.fillMaxSize()) {
+                Column(Modifier.width(m.leftWidth).fillMaxHeight()) {
+                    Dock("Scenes", Modifier.weight(1f).fillMaxWidth()) {
+                        ScenePanel(scenes,active?.id,{vm.setActiveScene(it)},{vm.addScene("Scene ${scenes.size+1}")},{vm.removeScene()},Modifier.fillMaxSize(),showHeader=false)
+                    }
+                    Dock("Sources", Modifier.weight(1f).fillMaxWidth()) {
+                        SourcePanel(
+                            sources = sources,
+                            sourceErrors = sourceErrors,
+                            onToggleVisibility = vm::toggleSourceVisibility,
+                            onToggleLock = vm::toggleSourceLock,
+                            onAdd = { addSource = true },
+                            onRemove = { selectedSourceId?.let(vm::removeSource) },
+                            onProperties = { editable(selectedSourceId)?.let { editingSource = it } },
+                            onFilters = { id -> editable(id)?.let { filteringSource = it } },
+                            onTransform = { id -> editable(id)?.takeIf { !it.isLocked }?.let { transformingSource = it } },
+                            onOpenProperties = { id -> editable(id)?.let { editingSource = it } },
+                            onRequestCapturePermission = { requestProjectionPermission() },
+                            onRenameSource = vm::renameSource,
+                            onDuplicateSource = vm::duplicateSource,
+                            onDeleteSource = vm::removeSource,
+                            onResetTransform = vm::resetSourceTransform,
+                            onPasteTransform = vm::updateSourceTransform,
+                            selectedSourceId = selectedSourceId,
+                            onSelectSource = { selectedSourceId = it; canvasFocusRequester.requestFocus() },
+                            onMoveSource = vm::moveSourceInStack,
+                            onMoveSourceToIndex = vm::moveSourceToDisplayIndex,
+                            groupChildren = groupChildren,
+                            onMoveIntoGroup = vm::moveSourceIntoGroup,
+                            onMoveOutOfGroup = vm::moveSourceOutOfGroup,
+                            modifier = Modifier.fillMaxSize(),
+                            showHeader = false
+                        )
+                    }
                 }
-            }
-            if (studio) {
-                Spacer(Modifier.width(12.dp))
-                BoxWithConstraints(
-                    modifier = Modifier.weight(1f).fillMaxHeight().background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    val aspect = videoConfig.baseResWidth.toFloat() / videoConfig.baseResHeight.coerceAtLeast(1)
-                    val canvasWidth = minOf(maxWidth, maxHeight * aspect)
-                    val canvasHeight = canvasWidth / aspect
-                    Box(Modifier.size(canvasWidth, canvasHeight)) {
-                        NativePreviewSurface(Modifier.fillMaxSize())
+                Column(Modifier.weight(1f).fillMaxHeight()) {
+                    Row(Modifier.fillMaxWidth().weight(1f).background(MaterialTheme.colorScheme.background).padding(6.dp)) {
+                        BoxWithConstraints(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                            val aspect = videoConfig.baseResWidth.toFloat() / videoConfig.baseResHeight.coerceAtLeast(1)
+                            val canvasWidth = minOf(maxWidth, maxHeight * aspect)
+                            val canvasHeight = canvasWidth / aspect
+                            Box(Modifier.size(canvasWidth, canvasHeight).background(Color.Black)) {
+                                EditablePreview(
+                                    sources,
+                                    selectedSourceId,
+                                    videoConfig.baseResWidth,
+                                    videoConfig.baseResHeight,
+                                    { selectedSourceId = it },
+                                    { id, transform -> vm.updateSourceTransform(id, transform) },
+                                    vm::moveSourceInStack,
+                                    canvasFocusRequester,
+                                    Modifier.fillMaxSize(),
+                                    snapping = general.snappingEnabled,
+                                    snapToSources = general.snapToSources
+                                )
+                            }
+                        }
+                        if (studio) {
+                            Spacer(Modifier.width(8.dp))
+                            BoxWithConstraints(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                                val aspect = videoConfig.baseResWidth.toFloat() / videoConfig.baseResHeight.coerceAtLeast(1)
+                                val canvasWidth = minOf(maxWidth, maxHeight * aspect)
+                                val canvasHeight = canvasWidth / aspect
+                                Box(Modifier.size(canvasWidth, canvasHeight).background(Color.Black)) {
+                                    NativePreviewSurface(Modifier.fillMaxSize())
+                                }
+                            }
+                        }
+                    }
+                    SourceToolbar(
+                        selectedName = editable(selectedSourceId)?.name,
+                        onProperties = { editable(selectedSourceId)?.let { editingSource = it } },
+                        onFilters = { editable(selectedSourceId)?.let { filteringSource = it } }
+                    )
+                    Row(Modifier.fillMaxWidth().height(m.bottomHeight)) {
+                        Dock("Audio Mixer", Modifier.weight(1f).fillMaxHeight()) {
+                            AudioMixerPanel(renderItems, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.fillMaxSize(), showHeader = false)
+                        }
+                        Dock("Scene Transitions", Modifier.width(m.transitionsWidth).fillMaxHeight()) {
+                            TransitionsDockContent(selectedTransition, vm::selectTransition, studio) { active?.id?.let { vm.setActiveScene(it) } }
+                        }
+                        Dock("Controls", Modifier.width(m.controlsWidth).fillMaxHeight()) {
+                            ControlsDockContent(
+                                isStreaming = streaming == StudioStreamState.LIVE,
+                                isRecording = recording == StudioRecordState.RECORDING,
+                                isStudioMode = studio,
+                                onStartStreaming = { vm.startStreaming() },
+                                onStopStreaming = { if (general.confirmStopStreaming) confirmStop = "streaming" else vm.stopStreaming() },
+                                onStartRecording = { vm.startRecording() },
+                                onStopRecording = { if (general.confirmStopRecording) confirmStop = "recording" else vm.stopRecording() },
+                                onReplayBuffer = { vm.startReplay() },
+                                onToggleStudio = { vm.toggleStudioMode() },
+                                onSettings = { onOpenSettings("General") }
+                            )
+                        }
                     }
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().height(210.dp)){
-            ScenePanel(scenes,active?.id,{vm.setActiveScene(it)},{vm.addScene("Scene ${scenes.size+1}")},{vm.removeScene()},Modifier.weight(1f).fillMaxHeight())
-            SourcePanel(
-                sources = sources,
-                sourceErrors = sourceErrors,
-                onToggleVisibility = vm::toggleSourceVisibility,
-                onToggleLock = vm::toggleSourceLock,
-                onAdd = { addSource = true },
-                onRemove = { selectedSourceId?.let(vm::removeSource) },
-                onProperties = { editable(selectedSourceId)?.let { editingSource = it } },
-                onFilters = { id -> editable(id)?.let { filteringSource = it } },
-                onTransform = { id -> editable(id)?.takeIf { !it.isLocked }?.let { transformingSource = it } },
-                onOpenProperties = { id -> editable(id)?.let { editingSource = it } },
-                onRequestCapturePermission = { requestProjectionPermission() },
-                onRenameSource = vm::renameSource,
-                onDuplicateSource = vm::duplicateSource,
-                onDeleteSource = vm::removeSource,
-                onResetTransform = vm::resetSourceTransform,
-                onPasteTransform = vm::updateSourceTransform,
-                selectedSourceId = selectedSourceId,
-                onSelectSource = { selectedSourceId = it; canvasFocusRequester.requestFocus() },
-                onMoveSource = vm::moveSourceInStack,
-                onMoveSourceToIndex = vm::moveSourceToDisplayIndex,
-                groupChildren = groupChildren,
-                onMoveIntoGroup = vm::moveSourceIntoGroup,
-                onMoveOutOfGroup = vm::moveSourceOutOfGroup,
-                modifier = Modifier.weight(1.2f).fillMaxHeight()
-            )
-            AudioMixerPanel(renderItems, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.weight(1.4f).fillMaxHeight());TransitionPanel(studio,selectedTransition,vm::selectTransition,{active?.id?.let{vm.setActiveScene(it)}},Modifier.weight(.9f).fillMaxHeight())
-            ControlsPanel(streaming==StudioStreamState.LIVE,recording==StudioRecordState.RECORDING,studio,{vm.startStreaming()},{vm.stopStreaming()},{vm.startRecording()},{vm.stopRecording()},{vm.startReplay()},{vm.toggleStudioMode()},{onOpenSettings("General")},Modifier.weight(1f).fillMaxHeight())
-        }
+        StudioStatusBar(
+            isStreaming = streaming == StudioStreamState.LIVE,
+            isRecording = recording == StudioRecordState.RECORDING,
+            targetFps = videoConfig.frameRate,
+            thermal = AstraDeviceMonitor.label(thermalStatus)
+        )
+    }
+    confirmStop?.let { what ->
+        ConfirmStopDialog(
+            actionType = what,
+            onDismiss = { confirmStop = null },
+            onConfirm = { if (what == "streaming") vm.stopStreaming() else vm.stopRecording(); confirmStop = null }
+        )
     }
     if(search)FeatureSearchSheet(entries){search=false}
     if(showProjectionGuideDialog) AlertDialog(

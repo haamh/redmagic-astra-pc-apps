@@ -23,7 +23,8 @@ fun AudioMixerPanel(
     sources: List<SourceItem>,
     onSourceConfigChanged: (SourceItem, String) -> Unit,
     peakProvider: (String) -> Float = { 0f },
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showHeader: Boolean = true
 ) {
     val audioSources = sources.filter {
         it.type.equals("AUDIO_INPUT", true) || it.type.equals("PLAYBACK_AUDIO", true) || it.type.equals("MEDIA", true) ||
@@ -32,16 +33,18 @@ fun AudioMixerPanel(
                 settings.optInt("audioDeviceId", -1) >= 0
             }.getOrDefault(false))
     }
-    Column(modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(30.dp).padding(horizontal = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("Audio Mixer", fontSize = 12.sp)
-            Icon(Icons.Default.Settings, contentDescription = "Mixer settings", modifier = Modifier.size(16.dp))
+    Column(modifier = modifier.background(MaterialTheme.colorScheme.surface)) {
+        if (showHeader) {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(30.dp).padding(horizontal = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Audio Mixer", fontSize = 12.sp)
+                Icon(Icons.Default.Settings, contentDescription = "Mixer settings", modifier = Modifier.size(16.dp))
+            }
+            HorizontalDivider(thickness = 1.dp)
         }
-        HorizontalDivider(thickness = 1.dp)
         if (audioSources.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
