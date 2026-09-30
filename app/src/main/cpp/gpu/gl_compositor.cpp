@@ -11,6 +11,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 #include <functional>
 
 namespace stream4k60 {
@@ -93,10 +94,12 @@ vec4 n=applyPixelStages(sampleSource(st+vec2(0.0,-uTexel.y)),i)+applyPixelStages
 c=vec4(clamp(c.rgb+(4.0*c.rgb-n.rgb)*s,0.0,1.0),c.a);}
 else c=applyPixelStage(c,i);}return c;}
 void main(){vec2 uv=mix(uCrop.xy,uCrop.zw,vUv);if(uFlipH)uv.x=1.-uv.x;if(uFlipV)uv.y=1.-uv.y;vec4 c=sampleSource(uv);if(uPremultiplied&&c.a>0.0)c.rgb/=c.a;c=applyFilters(c,uv);frag=vec4(c.rgb,c.a*uOpacity);})GLSL";
-static GLuint compileShader(GLenum t,const char*s){GLuint x=glCreateShader(t);glShaderSource(x,1,&s,nullptr);glCompileShader(x);GLint ok=0;glGetShaderiv(x,GL_COMPILE_STATUS,&ok);if(!ok){glDeleteShader(x);return 0;}return x;}
-static GLuint createProgram(){auto v=compileShader(GL_VERTEX_SHADER,VS);auto f=compileShader(GL_FRAGMENT_SHADER,FS);if(!v||!f){if(v)glDeleteShader(v);if(f)glDeleteShader(f);return 0;}GLuint p=glCreateProgram();glAttachShader(p,v);glAttachShader(p,f);glBindAttribLocation(p,0,"aPos");glBindAttribLocation(p,1,"aUv");glLinkProgram(p);GLint ok=0;glGetProgramiv(p,GL_LINK_STATUS,&ok);glDeleteShader(v);glDeleteShader(f);return ok?p:0;}
+static std::string gLastError;
+static GLuint compileShader(GLenum t,const char*s){GLuint x=glCreateShader(t);glShaderSource(x,1,&s,nullptr);glCompileShader(x);GLint ok=0;glGetShaderiv(x,GL_COMPILE_STATUS,&ok);
+if(!ok){char log[2048]={0};glGetShaderInfoLog(x,sizeof(log)-1,nullptr,log);gLastError=std::string(t==GL_VERTEX_SHADER?"Vertex":"Fragment")+" shader failed to compile: "+log;glDeleteShader(x);return 0;}return x;}
+static GLuint createProgram(){auto v=compileShader(GL_VERTEX_SHADER,VS);auto f=compileShader(GL_FRAGMENT_SHADER,FS);if(!v||!f){if(v)glDeleteShader(v);if(f)glDeleteShader(f);return 0;}GLuint p=glCreateProgram();glAttachShader(p,v);glAttachShader(p,f);glBindAttribLocation(p,0,"aPos");glBindAttribLocation(p,1,"aUv");glLinkProgram(p);GLint ok=0;glGetProgramiv(p,GL_LINK_STATUS,&ok);glDeleteShader(v);glDeleteShader(f);if(!ok){char log[2048]={0};glGetProgramInfoLog(p,sizeof(log)-1,nullptr,log);gLastError=std::string("Shader program failed to link: ")+log;glDeleteProgram(p);return 0;}return p;}
 
-bool GlCompositor::initialize(uint32_t w,uint32_t h,int fps,JNIEnv* env){canvasW_.store(w);canvasH_.store(h);fps_.store(std::clamp(fps,1,240));env->GetJavaVM(&vm_);if(!egl_.initialize()||!egl_.createOffscreenContext())return false;return setupGl();}
+bool GlCompositor::initialize(uint32_t w,uint32_t h,int fps,JNIEnv* env){canvasW_.store(w);canvasH_.store(h);fps_.store(std::clamp(fps,1,240));env->GetJavaVM(&vm_);if(!egl_.initialize()){gLastError="EGL display could not be initialized (eglInitialize or required Android EGL extensions missing).";return false;}if(!egl_.createOffscreenContext()){gLastError="EGL could not create an OpenGL ES 3 context (error 0x"+[]{char b[16];snprintf(b,sizeof b,"%X",eglGetError());return std::string(b);}()+").";return false;}return setupGl();}
 bool GlCompositor::setupGl(){program_=createProgram();if(!program_)return false;
     // Every sampler gets its own texture unit once. Unset samplers default to unit 0, and GLES rejects
     // draws where samplers of different types (external, 2D, 3D) share a unit.
@@ -152,6 +155,7 @@ void GlCompositor::clearLut(const std::string&id,int slot){
     if(it->second.texture)lutTexturesToDelete_.push_back(it->second.texture);
     luts_.erase(it);
 }
+std::string GlCompositor::lastError(){return gLastError;}
 std::string GlCompositor::lutKey(const std::string&id,int slot){
     std::lock_guard<std::mutex>lk(m_);
     auto it=luts_.find(lutMapKey(id,slot));

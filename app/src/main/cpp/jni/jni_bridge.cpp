@@ -68,6 +68,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_re
 }
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSourceOwner(JNIEnv*e,jclass,jstring id,jstring owner){g.setSourceOwner(jstr(e,id),jstr(e,owner));}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSourceSceneRef(JNIEnv*e,jclass,jstring id,jstring key){g.setSourceSceneRef(jstr(e,id),jstr(e,key));}
+extern "C" JNIEXPORT jstring JNICALL Java_com_stream4k60_app_engine_NativeEngine_getLastError(JNIEnv*e,jclass){return e->NewStringUTF(stream4k60::GlCompositor::lastError().c_str());}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_removeSourceLayer(JNIEnv*e,jclass,jstring id){g.releaseSource(jstr(e,id),e);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setTransition(JNIEnv*,jclass,jint type,jint duration){g.setTransition(type,duration);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setTransitionProgress(JNIEnv*,jclass,jfloat p){g.setTransitionProgress(p);}

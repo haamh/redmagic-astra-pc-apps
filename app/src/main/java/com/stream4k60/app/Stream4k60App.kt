@@ -21,10 +21,13 @@ class Stream4k60App:Application(){
 
     override fun onCreate(){
         super.onCreate()
+        CrashReporter.install(this)
         AstraDeviceMonitor.start(this)
         LutLibrary.initialize(this)
         if(BuildConfig.DEBUG)Timber.plant(Timber.DebugTree())
-        check(NativeEngine.initializeRenderer(3840,2160,60)){"Native GPU compositor initialization failed"}
+        check(NativeEngine.initializeRenderer(3840,2160,60)){
+            "Native GPU compositor initialization failed: ${NativeEngine.getLastError().ifBlank{"no EGL/shader details reported"}}"
+        }
         appScope.launch {
             settingsRepository.videoConfig.collectLatest { config ->
                 NativeEngine.setVideoSettings(config.baseResWidth, config.baseResHeight, config.frameRate)

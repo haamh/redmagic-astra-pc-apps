@@ -7,6 +7,8 @@ object NativeEngine {
     init { System.loadLibrary("stream4k60_engine") }
 
     external fun initializeRenderer(canvasWidth: Int, canvasHeight: Int, fps: Int): Boolean
+    /** The EGL/shader error behind a failed [initializeRenderer]. */
+    external fun getLastError(): String
     external fun shutdownRenderer()
     external fun startRenderer(): Boolean
     external fun stopRenderer()

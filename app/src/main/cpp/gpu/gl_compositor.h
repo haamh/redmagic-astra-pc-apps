@@ -57,6 +57,8 @@ public:
     void setLut(const std::string& id,int slot,const std::string& key,int size,const uint8_t* rgb,const float* domainMin,const float* domainMax);
     void clearLut(const std::string& id,int slot);
     std::string lutKey(const std::string& id,int slot);
+    // Why initialization failed (EGL or shader compiler message), for crash reports.
+    static std::string lastError();
     // Nested scenes and groups: each key renders into its own offscreen canvas of the given size.
     void setSceneTarget(const std::string& key,int width,int height);
     void retainSceneTargets(const std::vector<std::string>& keys);
