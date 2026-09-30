@@ -36,6 +36,19 @@ fun MainStudioScreen(
 ){
     val streaming by vm.streamState.collectAsState();val streamError by vm.streamError.collectAsState();val recording by vm.recordState.collectAsState();val studio by vm.isStudioModeEnabled.collectAsState();val selectedTransition by vm.selectedTransition.collectAsState();val scenes by vm.scenes.collectAsState();val sceneCollections by vm.sceneCollections.collectAsState();val activeCollectionId by vm.activeSceneCollectionId.collectAsState();val active by vm.activeScene.collectAsState();val sources by vm.sources.collectAsState();val sourceErrors by SourceRuntimeErrors.errors.collectAsState();val videoConfig by vm.videoConfig.collectAsState();val importedRtmpEndpoint by vm.importedRtmpEndpoint.collectAsState();var selectedSourceId by remember{mutableStateOf<String?>(null)};val canvasFocusRequester=remember{FocusRequester()};var search by remember{mutableStateOf(false)};var yt by remember{mutableStateOf(false)};var customRtmp by remember{mutableStateOf(false)};var addSource by remember{mutableStateOf(false)};var editingSource by remember{mutableStateOf<SourceItem?>(null)};var filteringSource by remember{mutableStateOf<SourceItem?>(null)}
     LaunchedEffect(active?.id) { selectedSourceId = null }
+    // Everything the program shows, including the contents of nested scenes and groups.
+    val renderSources by vm.renderSources.collectAsState()
+    val renderItems = remember(renderSources) { renderSources.map { it.item } }
+    val groupChildren by vm.groupChildren.collectAsState()
+    // Sources that can be opened for editing: the active scene's items and the contents of its groups.
+    fun editable(id: String?): SourceItem? = id?.let { key -> sources.firstOrNull { it.id == key } ?: groupChildren.values.flatten().firstOrNull { it.id == key } }
+    /** Canvas a source is positioned on: its group's canvas for group contents, otherwise the program canvas. */
+    fun canvasOf(id: String): Pair<Int, Int> {
+        val group = groupChildren.entries.firstOrNull { (_, items) -> items.any { it.id == id } }?.key?.let { gid -> sources.firstOrNull { it.id == gid } }
+        return group?.let { sourceSettings(it.configJson).let { c -> c.optInt("width", videoConfig.baseResWidth) to c.optInt("height", videoConfig.baseResHeight) } }
+            ?: (videoConfig.baseResWidth to videoConfig.baseResHeight)
+    }
+    var pickingNestedScene by remember { mutableStateOf(false) }
     val ctx=androidx.compose.ui.platform.LocalContext.current
     val thermalStatus by AstraDeviceMonitor.thermalStatus.collectAsState()
     var projectionRequested by remember{mutableStateOf(false)}
@@ -43,8 +56,8 @@ fun MainStudioScreen(
     var projectionDeniedForSources by remember{mutableStateOf(false)}
     var showProjectionGuideDialog by remember{mutableStateOf(false)}
     var showProjectionRetryDialog by remember{mutableStateOf(false)}
-    val screenIds=sources.filter{it.type.equals("SCREEN_CAPTURE",true)&&it.isVisible}.map{it.id}
-    val playbackIds=sources.filter{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}.map{it.id}
+    val screenIds=renderItems.filter{it.type.equals("SCREEN_CAPTURE",true)&&it.isVisible}.map{it.id}
+    val playbackIds=renderItems.filter{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}.map{it.id}
     val playback=playbackIds.isNotEmpty()
     val projectionLauncher=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
         projectionRequested=false
@@ -81,10 +94,10 @@ fun MainStudioScreen(
     var transformingSource by remember { mutableStateOf<SourceItem?>(null) }
     val scope=rememberCoroutineScope();val camera=remember{CameraSourceController(ctx)};val bitmap=remember{BitmapSourceController(ctx,scope)};val media=remember{MediaSourceController(ctx,scope)};val browser=remember{BrowserSourceController(ctx)};val usb=remember{com.stream4k60.app.engine.NativeUsbManager(ctx.applicationContext)};val usbDevices by usb.connectedDevices.collectAsState()
     // Transform-only edits should update the compositor without restarting capture sources.
-    val captureSources = sources.map { it.copy(transformJson = "{}") }
+    val captureSources = renderItems.map { it.copy(transformJson = "{}") }
     DisposableEffect(Unit){usb.initialize();browser.attachHost((ctx as Activity).findViewById(android.R.id.content) as ViewGroup);onDispose{camera.stopAll();bitmap.stop();media.stopAll();browser.stopAll();usb.shutdown();NativeEngine.setPreviewSurface(null)}}
     LaunchedEffect(captureSources,videoConfig,usbDevices){
-        camera.sync(sources);bitmap.sync(sources);media.sync(sources);browser.sync(sources)
+        camera.sync(renderItems);bitmap.sync(renderItems);media.sync(renderItems);browser.sync(renderItems)
         if(screenIds.isEmpty() && !playback){
             com.stream4k60.app.service.ProjectionCaptureService.stop(ctx)
             projectionGrantedInSession=false
@@ -94,9 +107,9 @@ fun MainStudioScreen(
         } else if(!projectionGrantedInSession && !projectionDeniedForSources && !projectionRequested){
             requestProjectionPermission()
         }
-        val wantedUsb=sources.filter{it.type.equals("USB_CAPTURE",true)&&it.isVisible}.mapNotNull{sourceSettings(it.configJson).optInt("deviceId",-1).takeIf{v->v>=0}}.toSet()
+        val wantedUsb=renderItems.filter{it.type.equals("USB_CAPTURE",true)&&it.isVisible}.mapNotNull{sourceSettings(it.configJson).optInt("deviceId",-1).takeIf{v->v>=0}}.toSet()
         usbDevices.filter{it.isCapturing&&it.deviceId !in wantedUsb}.forEach{usb.stopCapture(it.deviceId)}
-        val visibleUsbSources=sources.filter{it.type.equals("USB_CAPTURE",true)&&it.isVisible}
+        val visibleUsbSources=renderItems.filter{it.type.equals("USB_CAPTURE",true)&&it.isVisible}
         val duplicateUsbIds=visibleUsbSources.map{sourceSettings(it.configJson).optInt("deviceId",-1)}.filter{it>=0}.groupingBy{it}.eachCount().filterValues{it>1}.keys
         duplicateUsbIds.filter{id->usbDevices.any{it.deviceId==id&&it.isCapturing}}.forEach{usb.stopCapture(it)}
         visibleUsbSources.filter{sourceSettings(it.configJson).optInt("deviceId",-1) in duplicateUsbIds}.forEach{src->
@@ -112,11 +125,24 @@ fun MainStudioScreen(
             }
         }
     }
-    LaunchedEffect(sources,videoConfig){
-        sources.forEachIndexed{index,src->
-            NativeEngine.setSourceEffectsFromConfig(src.id,src.configJson)
-            applySourceTransformToNative(src,index,videoConfig.baseResWidth,videoConfig.baseResHeight)
+    var shownContainerIds by remember { mutableStateOf(emptySet<String>()) }
+    val nativeSizes by com.stream4k60.app.engine.SourceNativeSizes.sizes.collectAsState()
+    LaunchedEffect(renderSources,videoConfig,nativeSizes){
+        val base=videoConfig.baseResWidth to videoConfig.baseResHeight
+        // Nested scenes use the program canvas size; groups have their own canvas.
+        val canvasFor=renderSources.mapNotNull{rs->rs.containerKey?.let{key->key to if(rs.item.type.equals("GROUP",true)){
+            val c=sourceSettings(rs.item.configJson);c.optInt("width",base.first).coerceAtLeast(16) to c.optInt("height",base.second).coerceAtLeast(16)
+        }else base}}.toMap()
+        renderSources.forEach{rs->
+            NativeEngine.setSourceOwner(rs.item.id,rs.owner)
+            rs.containerKey?.let{key->val (w,h)=canvasFor.getValue(key);NativeEngine.setSceneTarget(key,w,h);NativeEngine.setSourceSceneRef(rs.item.id,key)}
+            val (cw,ch)=if(rs.owner.isEmpty())base else canvasFor[rs.owner]?:base
+            applySourceTransformToNative(rs.item,rs.z,cw,ch)
         }
+        NativeEngine.retainSceneTargets(canvasFor.keys.toTypedArray())
+        val containerIds=renderSources.filter{it.containerKey!=null}.map{it.item.id}.toSet()
+        (shownContainerIds-containerIds).forEach(NativeEngine::removeSourceLayer)
+        shownContainerIds=containerIds
     }
     DisposableEffect(Unit) {
         HotkeyDispatcher.attach(
@@ -212,10 +238,10 @@ fun MainStudioScreen(
                 onToggleLock = vm::toggleSourceLock,
                 onAdd = { addSource = true },
                 onRemove = { selectedSourceId?.let(vm::removeSource) },
-                onProperties = { sources.firstOrNull { it.id == selectedSourceId }?.let { editingSource = it } },
-                onFilters = { id -> sources.firstOrNull { it.id == id }?.let { filteringSource = it } },
-                onTransform = { id -> sources.firstOrNull { it.id == id && !it.isLocked }?.let { transformingSource = it } },
-                onOpenProperties = { id -> sources.firstOrNull { it.id == id }?.let { editingSource = it } },
+                onProperties = { editable(selectedSourceId)?.let { editingSource = it } },
+                onFilters = { id -> editable(id)?.let { filteringSource = it } },
+                onTransform = { id -> editable(id)?.takeIf { !it.isLocked }?.let { transformingSource = it } },
+                onOpenProperties = { id -> editable(id)?.let { editingSource = it } },
                 onRequestCapturePermission = { requestProjectionPermission() },
                 onRenameSource = vm::renameSource,
                 onDuplicateSource = vm::duplicateSource,
@@ -226,9 +252,12 @@ fun MainStudioScreen(
                 onSelectSource = { selectedSourceId = it; canvasFocusRequester.requestFocus() },
                 onMoveSource = vm::moveSourceInStack,
                 onMoveSourceToIndex = vm::moveSourceToDisplayIndex,
+                groupChildren = groupChildren,
+                onMoveIntoGroup = vm::moveSourceIntoGroup,
+                onMoveOutOfGroup = vm::moveSourceOutOfGroup,
                 modifier = Modifier.weight(1.2f).fillMaxHeight()
             )
-            AudioMixerPanel(sources, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.weight(1.4f).fillMaxHeight());TransitionPanel(studio,selectedTransition,vm::selectTransition,{active?.id?.let{vm.setActiveScene(it)}},Modifier.weight(.9f).fillMaxHeight())
+            AudioMixerPanel(renderItems, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.weight(1.4f).fillMaxHeight());TransitionPanel(studio,selectedTransition,vm::selectTransition,{active?.id?.let{vm.setActiveScene(it)}},Modifier.weight(.9f).fillMaxHeight())
             ControlsPanel(streaming==StudioStreamState.LIVE,recording==StudioRecordState.RECORDING,studio,{vm.startStreaming()},{vm.stopStreaming()},{vm.startRecording()},{vm.stopRecording()},{vm.startReplay()},{vm.toggleStudioMode()},{onOpenSettings("General")},Modifier.weight(1f).fillMaxHeight())
         }
     }
@@ -275,7 +304,8 @@ fun MainStudioScreen(
     streamError?.let { message ->
         AlertDialog(onDismissRequest = vm::dismissStreamError, title = { Text("Streaming could not start") }, text = { Text(message) }, confirmButton = { TextButton(onClick = vm::dismissStreamError) { Text("OK") } })
     }
-    if(addSource)SourceTypePicker(onAdd={vm.addSource(it);addSource=false},onDismiss={addSource=false})
+    if(addSource)SourceTypePicker(onAdd={type->addSource=false;if(type=="SCENE")pickingNestedScene=true else vm.addSource(type)},onDismiss={addSource=false})
+    if(pickingNestedScene)NestedScenePicker(vm,onDismiss={pickingNestedScene=false})
     filteringSource?.let { source ->
         FilterEditorScreen(
             source = source,
@@ -316,8 +346,8 @@ fun MainStudioScreen(
     transformingSource?.let { source ->
         TransformDialog(
             source = source,
-            canvasWidth = videoConfig.baseResWidth,
-            canvasHeight = videoConfig.baseResHeight,
+            canvasWidth = canvasOf(source.id).first,
+            canvasHeight = canvasOf(source.id).second,
             onApply = { transform -> vm.updateSourceTransform(source.id, transform); transformingSource = null },
             onDismiss = { transformingSource = null }
         )
@@ -330,7 +360,29 @@ private fun sourceSettings(configJson:String):JSONObject {
 }
 
 @Composable private fun SourceTypePicker(onAdd:(String)->Unit,onDismiss:()->Unit){
-    val types=listOf("USB_CAPTURE" to "USB camera / capture card","BROWSER" to "Browser","MEDIA" to "Media","IMAGE" to "Image","IMAGE_SLIDESHOW" to "Image slideshow","TEXT" to "Text","COLOR" to "Color","AUDIO_INPUT" to "Audio input","PLAYBACK_AUDIO" to "Android app audio","AUDIO_OUTPUT" to "Audio monitor output")
+    val types=listOf("USB_CAPTURE" to "USB camera / capture card","BROWSER" to "Browser","MEDIA" to "Media","IMAGE" to "Image","IMAGE_SLIDESHOW" to "Image slideshow","TEXT" to "Text","COLOR" to "Color","AUDIO_INPUT" to "Audio input","PLAYBACK_AUDIO" to "Android app audio","AUDIO_OUTPUT" to "Audio monitor output","SCENE" to "Scene (show another scene)","GROUP" to "Group")
     AlertDialog(onDismissRequest=onDismiss,title={Text("Add source")},text={Column{types.forEach{(id,name)->TextButton(onClick={onAdd(id)},modifier=Modifier.fillMaxWidth(),contentPadding=PaddingValues(horizontal=4.dp)){Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(name);Text("+")}}}}},confirmButton={})
 }
 
+/** Chooses a scene to show inside the active one; scenes that would create a loop are not offered. */
+@Composable private fun NestedScenePicker(vm: MainStudioViewModel, onDismiss: () -> Unit) {
+    var choices by remember { mutableStateOf<List<SceneItem>?>(null) }
+    LaunchedEffect(Unit) { choices = vm.nestableScenes() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add scene") },
+        text = {
+            Column {
+                when {
+                    choices == null -> Text("Loading scenes…")
+                    choices!!.isEmpty() -> Text("No other scene can be added here. Create another scene first; a scene that already shows this one cannot be added, because that would loop.")
+                    else -> choices!!.forEach { scene ->
+                        TextButton(onClick = { vm.addSceneSource(scene.id); onDismiss() }, modifier = Modifier.fillMaxWidth()) { Text(scene.name) }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}

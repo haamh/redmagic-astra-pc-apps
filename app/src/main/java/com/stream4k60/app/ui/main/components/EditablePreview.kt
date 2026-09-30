@@ -16,6 +16,7 @@ import androidx.compose.ui.input.pointer.isAltPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,7 +50,7 @@ import kotlin.math.min
 import kotlin.math.sin
 
 private val visualSourceTypes = setOf(
-    "CAMERA", "USB_CAPTURE", "SCREEN_CAPTURE", "MEDIA", "BROWSER", "IMAGE", "IMAGE_SLIDESHOW", "TEXT", "COLOR"
+    "CAMERA", "USB_CAPTURE", "SCREEN_CAPTURE", "MEDIA", "BROWSER", "IMAGE", "IMAGE_SLIDESHOW", "TEXT", "COLOR", "SCENE", "GROUP"
 )
 
 private data class SourceRect(
@@ -110,6 +111,8 @@ fun EditablePreview(
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
+    // Re-layout when a source's runtime size becomes known (auto-sized text, media video size).
+    val nativeSizes by com.stream4k60.app.engine.SourceNativeSizes.sizes.collectAsState()
     val selectionColor = Color(0xFF53C7FF)
     val selectedIdState = rememberUpdatedState(selectedSourceId)
     var transientTransforms by remember(sources) { mutableStateOf<Map<String, String>>(emptyMap()) }
@@ -177,7 +180,7 @@ fun EditablePreview(
                     }
                 }
                 .focusable()
-                .pointerInput(sources, canvasWidth, canvasHeight) {
+                .pointerInput(sources, canvasWidth, canvasHeight, nativeSizes) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                         focusRequester.requestFocus()
@@ -284,6 +287,7 @@ fun EditablePreview(
                 val py = y * size.height / canvasHeight.coerceAtLeast(1)
                 drawLine(Color(0xFFFF4D6D), Offset(0f, py), Offset(size.width, py), strokeWidth = 1.dp.toPx())
             }
+            nativeSizes.size // redraw the selection when measured sizes change
             selected?.let { source ->
                 val box = itemBox(source, canvasWidth, canvasHeight)
                 fun view(fx: Float, fy: Float): Offset {

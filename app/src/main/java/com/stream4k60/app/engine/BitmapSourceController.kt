@@ -64,7 +64,16 @@ class BitmapSourceController(private val context: Context, private val scope:Cor
                 frame=rgbaBitmap(src.name,w,h){canvas->canvas.drawColor(color)}
             }
             "TEXT"->{
-                val text=cfg.optString("text",src.name);val w=cfg.optInt("width",1280).coerceIn(1,4096);val h=cfg.optInt("height",720).coerceIn(1,4096)
+                val text=cfg.optString("text",src.name)
+                val lines=text.split('\n')
+                val style=(if(cfg.optBoolean("bold",false))Typeface.BOLD else Typeface.NORMAL) or (if(cfg.optBoolean("italic",false))Typeface.ITALIC else 0)
+                val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply{textSize=cfg.optDouble("fontSize",64.0).toFloat().coerceIn(1f,512f);typeface=Typeface.create(cfg.optString("fontFamily","sans-serif"),style)}
+                // Without an explicit size the text sizes itself to its content, like OBS text sources.
+                val autoSize=!cfg.has("width")||!cfg.has("height")
+                val margin=if(autoSize)0f else 24f
+                val w=(if(autoSize)kotlin.math.ceil(lines.maxOf{paint.measureText(it)}).toInt()+2 else cfg.optInt("width",1280)).coerceIn(1,4096)
+                val h=(if(autoSize)kotlin.math.ceil(lines.size*paint.fontSpacing).toInt()+2 else cfg.optInt("height",720)).coerceIn(1,4096)
+                if(autoSize)com.stream4k60.app.engine.SourceNativeSizes.report(src.id,w,h)
                 val rawTextColor=cfg.optString("textColor","#FFFFFFFF")
                 val rawBackgroundColor=cfg.optString("backgroundColor","#00000000")
                 val textColor=runCatching{Color.parseColor(rawTextColor)}.getOrNull()
@@ -72,12 +81,11 @@ class BitmapSourceController(private val context: Context, private val scope:Cor
                 if(textColor==null||background==null){SourceRuntimeErrors.report(src.id,"The text source contains an invalid color. Edit its properties and choose valid colors.");removeLayerIfCurrent(src.id,fingerprint);return}
                 frame=rgbaBitmap(text,w,h){canvas->
                     canvas.drawColor(background,PorterDuff.Mode.SRC)
-                    val style=(if(cfg.optBoolean("bold",false))Typeface.BOLD else Typeface.NORMAL) or (if(cfg.optBoolean("italic",false))Typeface.ITALIC else 0)
                     val align=when(cfg.optString("alignment","LEFT").uppercase()){"CENTER"->Paint.Align.CENTER;"RIGHT"->Paint.Align.RIGHT;else->Paint.Align.LEFT}
-                    val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply{textSize=cfg.optDouble("fontSize",64.0).toFloat().coerceIn(1f,512f);typeface=Typeface.create(cfg.optString("fontFamily","sans-serif"),style);color=textColor;textAlign=align}
-                    val x=when(align){Paint.Align.CENTER->w/2f;Paint.Align.RIGHT->w-24f;else->24f}
-                    val lines=text.split('\n');val lineHeight=paint.fontSpacing
-                    lines.forEachIndexed{index,line->canvas.drawText(line,x,24f-paint.ascent()+index*lineHeight,paint)}
+                    paint.color=textColor;paint.textAlign=align
+                    val x=when(align){Paint.Align.CENTER->w/2f;Paint.Align.RIGHT->w-margin;else->margin}
+                    val lineHeight=paint.fontSpacing
+                    lines.forEachIndexed{index,line->canvas.drawText(line,x,margin-paint.ascent()+index*lineHeight,paint)}
                 }
             }
             "IMAGE_SLIDESHOW"->{

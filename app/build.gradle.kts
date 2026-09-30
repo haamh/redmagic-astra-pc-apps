@@ -67,6 +67,11 @@ android {
         }
     }
     
+    testOptions {
+        // JVM unit tests exercise pure logic; Android framework stubs return defaults instead of throwing.
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         jniLibs {
             pickFirsts += listOf("**/*.so")

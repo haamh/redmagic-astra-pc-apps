@@ -91,4 +91,14 @@ class CanvasEditMathTest {
         assertEquals(75f, snapRotation(80f, fineSnap = true), 0f)
         assertEquals(-170f, normalizeDegrees(190f), 0f)
     }
+
+    @Test
+    fun runtimeSizeIsUsedWhenNoSizeIsSet() {
+        // An auto-sized OBS text item at scale 2 covers twice its measured text size.
+        val text = SourceItem("t", "Title", "TEXT", true, false, "{}", JSONObject().put("scale", JSONObject().put("x", 2).put("y", 2)).toString())
+        com.stream4k60.app.engine.SourceNativeSizes.report("t", 300, 80)
+        val b = box(text)
+        assertEquals(600f, b.width, 0.01f)
+        assertEquals(160f, b.height, 0.01f)
+    }
 }

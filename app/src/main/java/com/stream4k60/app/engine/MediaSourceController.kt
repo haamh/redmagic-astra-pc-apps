@@ -63,6 +63,13 @@ class MediaSourceController(private val context:Context,private val scope:Corout
                         override fun onPlaybackStateChanged(playbackState: Int) {
                             if (playbackState == Player.STATE_READY) SourceRuntimeErrors.clear(src.id)
                         }
+                        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                            // Rotation-aware display size, used for layout when the source has no explicit size.
+                            val rotated = videoSize.unappliedRotationDegrees % 180 != 0
+                            val w = if (rotated) videoSize.height else videoSize.width
+                            val h = if (rotated) videoSize.width else videoSize.height
+                            SourceNativeSizes.report(src.id, (w * videoSize.pixelWidthHeightRatio).toInt(), h)
+                        }
                     })
                     setMediaItems(media.map(MediaItem::fromUri))
                     repeatMode=if(cfg.optBoolean("loop",true))Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF

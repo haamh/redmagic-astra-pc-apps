@@ -15,6 +15,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.OpenWith
@@ -72,6 +74,9 @@ fun SourcePanel(
     onSelectSource: (String) -> Unit = {},
     onMoveSource: (String, Int) -> Unit = { _, _ -> },
     onMoveSourceToIndex: (String, Int) -> Unit = { _, _ -> },
+    groupChildren: Map<String, List<SourceItem>> = emptyMap(),
+    onMoveIntoGroup: (String, String) -> Unit = { _, _ -> },
+    onMoveOutOfGroup: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -82,6 +87,14 @@ fun SourcePanel(
     var copiedTransform by remember { mutableStateOf<String?>(null) }
     var renameTarget by remember { mutableStateOf<SourceItem?>(null) }
     var renameValue by remember { mutableStateOf("") }
+    var collapsedGroups by remember { mutableStateOf(emptySet<String>()) }
+    val groups = sources.filter { it.type.equals("GROUP", true) }
+    // Rows: (source, parent group id or null). Group contents follow their group, front-most first;
+    // they are hidden while a top-level row is being dragged so drag slots match top-level order.
+    val rows = if (draggingSourceId != null) displayOrder.map { it to null } else displayOrder.flatMap { source ->
+        listOf<Pair<SourceItem, String?>>(source to null) +
+            if (source.type.equals("GROUP", true) && source.id !in collapsedGroups) groupChildren[source.id].orEmpty().asReversed().map { it to source.id } else emptyList()
+    }
     LaunchedEffect(sources) {
         if (draggingSourceId == null) displayOrder = sources.asReversed()
     }
@@ -90,7 +103,8 @@ fun SourcePanel(
         HorizontalDivider(thickness = 1.dp)
         LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
             // The top row is the front-most layer, matching OBS and the native compositor's z-order.
-            items(displayOrder, key = { it.id }) { source ->
+            items(rows, key = { it.first.id }) { (source, parentGroupId) ->
+                val siblings = parentGroupId?.let { groupChildren[it].orEmpty() }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -123,9 +137,18 @@ fun SourcePanel(
                             onClick = { onSelectSource(source.id) },
                             onLongClick = { contextMenuSourceId = source.id }
                         )
-                        .padding(horizontal = 4.dp),
+                        .padding(start = if (parentGroupId != null) 20.dp else 4.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (source.type.equals("GROUP", true)) {
+                        val collapsed = source.id in collapsedGroups
+                        IconButton(
+                            onClick = { collapsedGroups = if (collapsed) collapsedGroups - source.id else collapsedGroups + source.id },
+                            modifier = Modifier.size(20.dp)
+                        ) {
+                            Icon(if (collapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore, if (collapsed) "Expand group" else "Collapse group", modifier = Modifier.size(16.dp))
+                        }
+                    }
                     IconButton(onClick = { onToggleVisibility(source.id) }, modifier = Modifier.size(24.dp)) {
                         Icon(if (source.isVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, "Visibility", modifier = Modifier.size(15.dp))
                     }
@@ -202,8 +225,22 @@ fun SourcePanel(
                             )
                             androidx.compose.material3.DropdownMenuItem(
                                 text = { Text("Move to Bottom") },
-                                onClick = { contextMenuSourceId = null; onMoveSourceToIndex(source.id, displayOrder.lastIndex) }
+                                onClick = { contextMenuSourceId = null; onMoveSourceToIndex(source.id, (siblings?.size ?: displayOrder.size) - 1) }
                             )
+                            if (parentGroupId != null) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Move out of group") },
+                                    onClick = { contextMenuSourceId = null; onMoveOutOfGroup(source.id) }
+                                )
+                            } else if (!source.type.equals("GROUP", true)) {
+                                // OBS groups cannot contain groups.
+                                groups.forEach { group ->
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = { Text("Move into “${group.name}”") },
+                                        onClick = { contextMenuSourceId = null; onMoveIntoGroup(source.id, group.id) }
+                                    )
+                                }
+                            }
                             androidx.compose.material3.HorizontalDivider()
                             androidx.compose.material3.DropdownMenuItem(
                                 text = { Text("Remove", color = MaterialTheme.colorScheme.error) },
@@ -211,7 +248,7 @@ fun SourcePanel(
                             )
                         }
                     }
-                    Box(
+                    if (parentGroupId == null) Box(
                         modifier = Modifier
                             .width(28.dp)
                             .fillMaxHeight()

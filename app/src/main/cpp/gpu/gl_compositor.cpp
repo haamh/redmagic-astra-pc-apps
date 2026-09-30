@@ -11,13 +11,15 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <functional>
 
 namespace stream4k60 {
 static const char* VS=R"GLSL(#version 320 es
 layout(location=0)in vec2 aPos;layout(location=1)in vec2 aUv;
 uniform vec2 uCanvas;uniform vec4 uRect;uniform vec2 uScale;uniform vec2 uPivot;uniform float uRotation;uniform mat4 uTexMatrix;
+uniform float uClipFlipY;
 out vec2 vUv;
-void main(){vec2 p=(aPos*.5+.5)*uRect.zw*uScale;p-=uPivot;float cs=cos(uRotation),sn=sin(uRotation);p=vec2(p.x*cs-p.y*sn,p.x*sn+p.y*cs)+uPivot+uRect.xy;vec2 clip=vec2(p.x/uCanvas.x*2.-1.,1.-p.y/uCanvas.y*2.);gl_Position=vec4(clip,0,1);vUv=(uTexMatrix*vec4(aUv,0,1)).xy;})GLSL";
+void main(){vec2 p=(aPos*.5+.5)*uRect.zw*uScale;p-=uPivot;float cs=cos(uRotation),sn=sin(uRotation);p=vec2(p.x*cs-p.y*sn,p.x*sn+p.y*cs)+uPivot+uRect.xy;vec2 clip=vec2(p.x/uCanvas.x*2.-1.,(1.-p.y/uCanvas.y*2.)*uClipFlipY);gl_Position=vec4(clip,0,1);vUv=(uTexMatrix*vec4(aUv,0,1)).xy;})GLSL";
 static const char* FS=R"GLSL(#version 320 es
 #extension GL_OES_EGL_image_external_essl3 : require
 precision highp float;
@@ -37,6 +39,7 @@ uniform int uStageCount;
 uniform int uStageType[MAX_STAGES];
 uniform vec4 uStageParams[MAX_STAGES*4];
 uniform vec2 uTexel;
+uniform bool uPremultiplied;
 precision highp sampler3D;
 uniform sampler3D uLut0;
 uniform sampler3D uLut1;
@@ -89,12 +92,20 @@ vec4 n=applyPixelStages(sampleSource(st+vec2(0.0,-uTexel.y)),i)+applyPixelStages
 +applyPixelStages(sampleSource(st+vec2(-uTexel.x,0.0)),i)+applyPixelStages(sampleSource(st+vec2(uTexel.x,0.0)),i);
 c=vec4(clamp(c.rgb+(4.0*c.rgb-n.rgb)*s,0.0,1.0),c.a);}
 else c=applyPixelStage(c,i);}return c;}
-void main(){vec2 uv=mix(uCrop.xy,uCrop.zw,vUv);if(uFlipH)uv.x=1.-uv.x;if(uFlipV)uv.y=1.-uv.y;vec4 c=sampleSource(uv);c=applyFilters(c,uv);frag=vec4(c.rgb,c.a*uOpacity);})GLSL";
+void main(){vec2 uv=mix(uCrop.xy,uCrop.zw,vUv);if(uFlipH)uv.x=1.-uv.x;if(uFlipV)uv.y=1.-uv.y;vec4 c=sampleSource(uv);if(uPremultiplied&&c.a>0.0)c.rgb/=c.a;c=applyFilters(c,uv);frag=vec4(c.rgb,c.a*uOpacity);})GLSL";
 static GLuint compileShader(GLenum t,const char*s){GLuint x=glCreateShader(t);glShaderSource(x,1,&s,nullptr);glCompileShader(x);GLint ok=0;glGetShaderiv(x,GL_COMPILE_STATUS,&ok);if(!ok){glDeleteShader(x);return 0;}return x;}
 static GLuint createProgram(){auto v=compileShader(GL_VERTEX_SHADER,VS);auto f=compileShader(GL_FRAGMENT_SHADER,FS);if(!v||!f){if(v)glDeleteShader(v);if(f)glDeleteShader(f);return 0;}GLuint p=glCreateProgram();glAttachShader(p,v);glAttachShader(p,f);glBindAttribLocation(p,0,"aPos");glBindAttribLocation(p,1,"aUv");glLinkProgram(p);GLint ok=0;glGetProgramiv(p,GL_LINK_STATUS,&ok);glDeleteShader(v);glDeleteShader(f);return ok?p:0;}
 
 bool GlCompositor::initialize(uint32_t w,uint32_t h,int fps,JNIEnv* env){canvasW_.store(w);canvasH_.store(h);fps_.store(std::clamp(fps,1,240));env->GetJavaVM(&vm_);if(!egl_.initialize()||!egl_.createOffscreenContext())return false;return setupGl();}
-bool GlCompositor::setupGl(){program_=createProgram();if(!program_)return false;const char* ovs=R"GLSL(#version 320 es
+bool GlCompositor::setupGl(){program_=createProgram();if(!program_)return false;
+    // Every sampler gets its own texture unit once. Unset samplers default to unit 0, and GLES rejects
+    // draws where samplers of different types (external, 2D, 3D) share a unit.
+    glUseProgram(program_);
+    glUniform1i(glGetUniformLocation(program_,"uExtTex"),0);glUniform1i(glGetUniformLocation(program_,"u2DTex"),1);
+    glUniform1i(glGetUniformLocation(program_,"uRawTex"),2);glUniform1i(glGetUniformLocation(program_,"uRawAuxTex"),3);
+    glUniform1i(glGetUniformLocation(program_,"uLut0"),4);glUniform1i(glGetUniformLocation(program_,"uLut1"),5);
+    glUseProgram(0);
+const char* ovs=R"GLSL(#version 320 es
 layout(location=0)in vec2 aPos;out vec2 v;void main(){v=aPos;gl_Position=vec4(aPos,0.,1.);}
 )GLSL";const char* ofs=R"GLSL(#version 320 es
 precision highp float;uniform vec4 uColor;out vec4 frag;void main(){frag=uColor;}
@@ -109,8 +120,8 @@ void GlCompositor::releaseSource(const std::string&id,JNIEnv*env){bool was=runni
 GlCompositor::Source* GlCompositor::source(const std::string&id){auto it=sources_.find(id);return it==sources_.end()?nullptr:&it->second;}
 void GlCompositor::applyPendingFilters(SourceLayer&layer,const std::string&id){auto it=pendingFilters_.find(id);if(it==pendingFilters_.end())return;const auto&p=it->second;layer.filterCount=p.filterCount;std::copy(std::begin(p.filterTypes),std::end(p.filterTypes),layer.filterTypes);std::copy(std::begin(p.filterParams),std::end(p.filterParams),layer.filterParams);pendingFilters_.erase(it);}
 void GlCompositor::updateLayer(const std::string&id,float x,float y,float w,float h,float pivotX,float pivotY,float r,float sx,float sy,float op,float cl,float ct,float cr,float cb,bool vis,int z,bool fh,bool fv){std::lock_guard<std::mutex>lk(m_);auto*s=source(id);if(!s)return;s->layer.x=x;s->layer.y=y;s->layer.w=w;s->layer.h=h;s->layer.pivotX=pivotX;s->layer.pivotY=pivotY;s->layer.rotation=r;s->layer.scaleX=sx;s->layer.scaleY=sy;s->layer.opacity=op;s->layer.cropL=cl;s->layer.cropT=ct;s->layer.cropR=cr;s->layer.cropB=cb;s->layer.visible=vis;s->layer.z=z;s->layer.flipH=fh;s->layer.flipV=fv;}
-bool GlCompositor::updateRgba(const std::string&id,const uint8_t*pixels,size_t bytes,int width,int height){if(!pixels||bytes==0||width<=0||height<=0)return false;std::lock_guard<std::mutex>lk(m_);auto &s=sources_[id];s.layer.id=id;applyPendingFilters(s.layer,id);s.external=false;s.layer.external=false;s.layer.rawFormat=RawPixelFormat::NONE;s.pixelW=width;s.pixelH=height;s.pendingRgba.assign(pixels,pixels+bytes);s.pendingRaw.clear();s.layer.rawWidth=width;s.layer.rawHeight=height;s.layer.texMatrix[0]=s.layer.texMatrix[5]=s.layer.texMatrix[10]=s.layer.texMatrix[15]=1.f;for(int i:{1,2,3,4,6,7,8,9,11,12,13,14})s.layer.texMatrix[i]=0.f;s.layer.w=width;s.layer.h=height;return true;}
-bool GlCompositor::updateRaw(const std::string&id,const uint8_t*pixels,size_t bytes,int width,int height,RawPixelFormat format){if(!pixels||bytes==0||width<=0||height<=0||format==RawPixelFormat::NONE)return false;std::lock_guard<std::mutex>lk(m_);auto &s=sources_[id];s.layer.id=id;applyPendingFilters(s.layer,id);s.external=false;s.layer.external=false;s.layer.rawFormat=format;s.layer.rawWidth=width;s.layer.rawHeight=height;s.pixelW=width;s.pixelH=height;s.pendingRaw.assign(pixels,pixels+bytes);s.pendingRgba.clear();s.layer.w=width;s.layer.h=height;s.layer.texMatrix[0]=s.layer.texMatrix[5]=s.layer.texMatrix[10]=s.layer.texMatrix[15]=1.f;for(int i:{1,2,3,4,6,7,8,9,11,12,13,14})s.layer.texMatrix[i]=0.f;return true;}
+bool GlCompositor::updateRgba(const std::string&id,const uint8_t*pixels,size_t bytes,int width,int height){if(!pixels||bytes==0||width<=0||height<=0)return false;std::lock_guard<std::mutex>lk(m_);auto &s=sources_[id];s.layer.id=id;applyPendingFilters(s.layer,id);s.external=false;s.layer.external=false;s.layer.rawFormat=RawPixelFormat::NONE;s.pixelW=width;s.pixelH=height;s.pendingRgba.assign(pixels,pixels+bytes);s.pendingRaw.clear();s.layer.rawWidth=width;s.layer.rawHeight=height;s.layer.texMatrix[0]=s.layer.texMatrix[5]=s.layer.texMatrix[10]=s.layer.texMatrix[15]=1.f;for(int i:{1,2,3,4,6,7,8,9,11,12,13,14})s.layer.texMatrix[i]=0.f;s.layer.texMatrix[5]=-1.f;s.layer.texMatrix[13]=1.f;s.layer.w=width;s.layer.h=height;return true;}
+bool GlCompositor::updateRaw(const std::string&id,const uint8_t*pixels,size_t bytes,int width,int height,RawPixelFormat format){if(!pixels||bytes==0||width<=0||height<=0||format==RawPixelFormat::NONE)return false;std::lock_guard<std::mutex>lk(m_);auto &s=sources_[id];s.layer.id=id;applyPendingFilters(s.layer,id);s.external=false;s.layer.external=false;s.layer.rawFormat=format;s.layer.rawWidth=width;s.layer.rawHeight=height;s.pixelW=width;s.pixelH=height;s.pendingRaw.assign(pixels,pixels+bytes);s.pendingRgba.clear();s.layer.w=width;s.layer.h=height;s.layer.texMatrix[0]=s.layer.texMatrix[5]=s.layer.texMatrix[10]=s.layer.texMatrix[15]=1.f;for(int i:{1,2,3,4,6,7,8,9,11,12,13,14})s.layer.texMatrix[i]=0.f;s.layer.texMatrix[5]=-1.f;s.layer.texMatrix[13]=1.f;return true;}
 
 void GlCompositor::updateFilterChain(const std::string&id,const int*types,int count,const float*params,int paramCount){
     std::lock_guard<std::mutex>lk(m_);
@@ -146,18 +157,40 @@ std::string GlCompositor::lutKey(const std::string&id,int slot){
     auto it=luts_.find(lutMapKey(id,slot));
     return it==luts_.end()?std::string():it->second.key;
 }
+void GlCompositor::setSceneTarget(const std::string&key,int width,int height){
+    if(key.empty())return;
+    std::lock_guard<std::mutex>lk(m_);
+    auto&t=sceneTargets_[key];
+    t.width=std::clamp(width,16,8192);t.height=std::clamp(height,16,8192);
+}
+void GlCompositor::retainSceneTargets(const std::vector<std::string>&keys){
+    std::lock_guard<std::mutex>lk(m_);
+    for(auto it=sceneTargets_.begin();it!=sceneTargets_.end();){
+        if(std::find(keys.begin(),keys.end(),it->first)==keys.end()){
+            sceneTargetsToDelete_.push_back({it->second.fbo,it->second.texture});
+            it=sceneTargets_.erase(it);
+        }else ++it;
+    }
+}
+void GlCompositor::setSourceOwner(const std::string&id,const std::string&owner){
+    std::lock_guard<std::mutex>lk(m_);
+    if(owner.empty())owners_.erase(id);else owners_[id]=owner;
+}
+void GlCompositor::setSourceSceneRef(const std::string&id,const std::string&key){
+    std::lock_guard<std::mutex>lk(m_);
+    auto&s=sources_[id];
+    s.layer.id=id;
+    applyPendingFilters(s.layer,id);
+    s.external=false;s.layer.external=false;
+    s.layer.rawFormat=RawPixelFormat::NONE;
+    s.layer.sceneRef=key;
+    // Offscreen canvases are rendered top row first, like CPU uploads.
+    for(int i=0;i<16;++i)s.layer.texMatrix[i]=(i%5==0)?1.f:0.f;
+    s.layer.texMatrix[5]=-1.f;s.layer.texMatrix[13]=1.f;
+}
 void GlCompositor::renderTransitionOverlay(int width,int height){if(!overlayProgram_||transitionType_==0||transitionProgress_<=0.001f)return;glUseProgram(overlayProgram_);glBindVertexArray(vao_);glDisable(GL_DEPTH_TEST);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);GLint c=glGetUniformLocation(overlayProgram_,"uColor");float alpha=transitionProgress_;glUniform4f(c,transitionR_,transitionG_,transitionB_,alpha);glDrawArrays(GL_TRIANGLE_STRIP,0,4);}
 
-void GlCompositor::renderTo(EGLSurface target,int width,int height,int canvasWidth,int canvasHeight){
-    if(target==EGL_NO_SURFACE||width<=0||height<=0)return;
-    eglMakeCurrent(egl_.display(),target,target,egl_.context());
-    glViewport(0,0,width,height);
-    glDisable(GL_SCISSOR_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-    glClearColor(0,0,0,1);
-    glClear(GL_COLOR_BUFFER_BIT);
-
+std::vector<SourceLayer> GlCompositor::prepareFrame(){
     std::vector<SourceLayer> layers;
     {
         std::lock_guard<std::mutex> lock(m_);
@@ -226,6 +259,8 @@ void GlCompositor::renderTo(EGLSurface target,int width,int height,int canvasWid
                 source.pendingRaw.clear();
             }
             SourceLayer layer=source.layer;
+            {auto o=owners_.find(entry.first);layer.owner=o==owners_.end()?std::string():o->second;}
+            if(!layer.sceneRef.empty()){auto t=sceneTargets_.find(layer.sceneRef);if(t!=sceneTargets_.end()){source.pixelW=t->second.width;source.pixelH=t->second.height;}}
             if(source.pixelW>0&&source.pixelH>0){layer.rawWidth=layer.rawFormat==RawPixelFormat::NONE?source.pixelW:layer.rawWidth;layer.rawHeight=layer.rawFormat==RawPixelFormat::NONE?source.pixelH:layer.rawHeight;}
             layers.push_back(layer);
         }
@@ -248,6 +283,10 @@ void GlCompositor::renderTo(EGLSurface target,int width,int height,int canvasWid
         }
     }
     std::sort(layers.begin(),layers.end(),[](const auto& left,const auto& right){return left.z<right.z;});
+    return layers;
+}
+
+void GlCompositor::drawLayers(const std::vector<SourceLayer>& layers,const std::string& owner,int canvasWidth,int canvasHeight,bool toOffscreen){
     glUseProgram(program_);
     glBindVertexArray(vao_);
     const GLint uExt=glGetUniformLocation(program_,"uExternal"),uRaw=glGetUniformLocation(program_,"uRawFormat"),uCanvas=glGetUniformLocation(program_,"uCanvas"),uRect=glGetUniformLocation(program_,"uRect"),uScale=glGetUniformLocation(program_,"uScale"),uPivot=glGetUniformLocation(program_,"uPivot"),uRot=glGetUniformLocation(program_,"uRotation"),uMat=glGetUniformLocation(program_,"uTexMatrix"),uOp=glGetUniformLocation(program_,"uOpacity"),uCrop=glGetUniformLocation(program_,"uCrop"),uFH=glGetUniformLocation(program_,"uFlipH"),uFV=glGetUniformLocation(program_,"uFlipV"),uRawSize=glGetUniformLocation(program_,"uRawSize"),uExtTex=glGetUniformLocation(program_,"uExtTex"),u2D=glGetUniformLocation(program_,"u2DTex"),uRawTex=glGetUniformLocation(program_,"uRawTex"),uRawAux=glGetUniformLocation(program_,"uRawAuxTex");
@@ -257,8 +296,16 @@ void GlCompositor::renderTo(EGLSurface target,int width,int height,int canvasWid
     struct LutView{GLuint texture;int size;float domainMin[3],domainMax[3];};
     std::map<std::string,LutView> lutByKey;
     {std::lock_guard<std::mutex> lock(m_);for(auto&e:luts_){const auto&l=e.second;if(!l.texture)continue;LutView v{l.texture,l.size,{},{}};for(int c=0;c<3;++c){v.domainMin[c]=l.domainMin[c];v.domainMax[c]=l.domainMax[c];}lutByKey.emplace(e.first,v);}}
+    std::map<std::string,GLuint> sceneTextures;
+    {std::lock_guard<std::mutex> lock(m_);for(auto&e:sceneTargets_)if(e.second.texture)sceneTextures[e.first]=e.second.texture;}
+    glUniform1f(glGetUniformLocation(program_,"uClipFlipY"),toOffscreen?-1.f:1.f);
+    const GLint uPremul=glGetUniformLocation(program_,"uPremultiplied");
     for(const auto& layer:layers){
-        if(!layer.visible||!layer.textureId)continue;
+        if(layer.owner!=owner||!layer.visible)continue;
+        GLuint sceneTexture=0;
+        if(!layer.sceneRef.empty()){auto t=sceneTextures.find(layer.sceneRef);if(t==sceneTextures.end())continue;sceneTexture=t->second;}
+        else if(!layer.textureId)continue;
+        glUniform1i(uPremul,sceneTexture?1:0);
         glUniform1i(uExt,layer.external?1:0);glUniform1i(uRaw,static_cast<int>(layer.rawFormat));
         glUniform1i(uExtTex,0);glUniform1i(u2D,1);glUniform1i(uRawTex,2);glUniform1i(uRawAux,3);
         glUniform2f(uCanvas,static_cast<float>(canvasWidth),static_cast<float>(canvasHeight));
@@ -287,10 +334,68 @@ void GlCompositor::renderTo(EGLSurface target,int width,int height,int canvasWid
         {const float tw=layer.rawWidth>0?static_cast<float>(layer.rawWidth):std::max(1.f,layer.w),th=layer.rawHeight>0?static_cast<float>(layer.rawHeight):std::max(1.f,layer.h);glUniform2f(uTexel,1.f/tw,1.f/th);}
         glUniform1i(uFH,layer.flipH);glUniform1i(uFV,layer.flipV);glUniform2f(uRawSize,static_cast<float>(layer.rawWidth),static_cast<float>(layer.rawHeight));
         if(layer.external){glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_EXTERNAL_OES,layer.textureId);}
-        else if(layer.rawFormat==RawPixelFormat::NONE){glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,layer.textureId);}
+        else if(layer.rawFormat==RawPixelFormat::NONE){glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,sceneTexture?sceneTexture:layer.textureId);}
         else{glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,layer.textureId);if(layer.rawFormat==RawPixelFormat::NV12){glActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D,layer.auxTextureId);}}
         glDrawArrays(GL_TRIANGLE_STRIP,0,4);
     }
+    glBindVertexArray(0);
+}
+
+// Renders every nested scene/group canvas reachable from the program canvas, dependencies first.
+void GlCompositor::renderSceneTargets(const std::vector<SourceLayer>& layers){
+    std::map<std::string,std::pair<int,int>> sizes;
+    {
+        std::lock_guard<std::mutex> lock(m_);
+        for(auto& d:sceneTargetsToDelete_){if(d.first)glDeleteFramebuffers(1,&d.first);if(d.second)glDeleteTextures(1,&d.second);}
+        sceneTargetsToDelete_.clear();
+        for(auto& e:sceneTargets_){
+            auto& t=e.second;
+            if(t.width<=0||t.height<=0)continue;
+            if(!t.fbo||t.allocW!=t.width||t.allocH!=t.height){
+                if(!t.texture)glGenTextures(1,&t.texture);
+                glBindTexture(GL_TEXTURE_2D,t.texture);
+                glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,t.width,t.height,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+                glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+                if(!t.fbo)glGenFramebuffers(1,&t.fbo);
+                glBindFramebuffer(GL_FRAMEBUFFER,t.fbo);
+                glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,t.texture,0);
+                t.allocW=t.width;t.allocH=t.height;
+            }
+            sizes[e.first]={t.width,t.height};
+        }
+    }
+    if(sizes.empty())return;
+    std::map<std::string,GLuint> fbos;
+    {std::lock_guard<std::mutex> lock(m_);for(auto&e:sceneTargets_)if(e.second.fbo)fbos[e.first]=e.second.fbo;}
+    std::map<std::string,int> state; // 1 = rendering (cycle guard), 2 = done
+    std::function<void(const std::string&,int)> render=[&](const std::string& key,int depth){
+        if(depth>8||state[key]!=0||!sizes.count(key)||!fbos.count(key))return;
+        state[key]=1;
+        for(const auto& l:layers)if(l.owner==key&&l.visible&&!l.sceneRef.empty())render(l.sceneRef,depth+1);
+        const auto size=sizes[key];
+        glBindFramebuffer(GL_FRAMEBUFFER,fbos[key]);
+        glViewport(0,0,size.first,size.second);
+        glClearColor(0,0,0,0);
+        glClear(GL_COLOR_BUFFER_BIT);
+        drawLayers(layers,key,size.first,size.second,true);
+        state[key]=2;
+    };
+    for(const auto& l:layers)if(l.owner.empty()&&l.visible&&!l.sceneRef.empty())render(l.sceneRef,0);
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
+}
+
+void GlCompositor::renderTo(EGLSurface target,int width,int height,int canvasWidth,int canvasHeight,const std::vector<SourceLayer>& layers){
+    if(target==EGL_NO_SURFACE||width<=0||height<=0)return;
+    eglMakeCurrent(egl_.display(),target,target,egl_.context());
+    glBindFramebuffer(GL_FRAMEBUFFER,0);
+    glViewport(0,0,width,height);
+    glClearColor(0,0,0,1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    drawLayers(layers,std::string(),canvasWidth,canvasHeight,false);
+    glBindVertexArray(vao_);
     renderTransitionOverlay(width,height);
     glBindVertexArray(0);
     eglSwapBuffers(egl_.display(),target);
@@ -313,11 +418,22 @@ void GlCompositor::loop(){
         const auto frameStart=std::chrono::steady_clock::now();
         const int canvasWidth=static_cast<int>(canvasW_.load());
         const int canvasHeight=static_cast<int>(canvasH_.load());
-        if(preview_!=EGL_NO_SURFACE&&previewWin_){
-            renderTo(preview_,ANativeWindow_getWidth(previewWin_),ANativeWindow_getHeight(previewWin_),canvasWidth,canvasHeight);
-        }
-        if(encoder_!=EGL_NO_SURFACE&&encoderWin_){
-            renderTo(encoder_,ANativeWindow_getWidth(encoderWin_),ANativeWindow_getHeight(encoderWin_),canvasWidth,canvasHeight);
+        {
+            // Latch source frames, upload textures and draw nested scenes once per frame, then present.
+            const EGLSurface work=preview_!=EGL_NO_SURFACE?preview_:(encoder_!=EGL_NO_SURFACE?encoder_:egl_.surface());
+            eglMakeCurrent(egl_.display(),work,work,egl_.context());
+            glDisable(GL_SCISSOR_TEST);
+            glEnable(GL_BLEND);
+            // Straight-alpha sources; destination alpha accumulates correctly for offscreen scene canvases.
+            glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
+            const std::vector<SourceLayer> layers=prepareFrame();
+            renderSceneTargets(layers);
+            if(preview_!=EGL_NO_SURFACE&&previewWin_){
+                renderTo(preview_,ANativeWindow_getWidth(previewWin_),ANativeWindow_getHeight(previewWin_),canvasWidth,canvasHeight,layers);
+            }
+            if(encoder_!=EGL_NO_SURFACE&&encoderWin_){
+                renderTo(encoder_,ANativeWindow_getWidth(encoderWin_),ANativeWindow_getHeight(encoderWin_),canvasWidth,canvasHeight,layers);
+            }
         }
         const auto frameEnd=std::chrono::steady_clock::now();
         renderMs_.store(std::chrono::duration<float,std::milli>(frameEnd-frameStart).count());
@@ -343,5 +459,5 @@ void GlCompositor::loop(){
     vm_->DetachCurrentThread();
 }bool GlCompositor::start(){if(running_.exchange(true))return true;thread_=std::thread(&GlCompositor::loop,this);return true;}
 void GlCompositor::stop(){if(!running_.exchange(false))return;if(thread_.joinable())thread_.join();}
-void GlCompositor::shutdown(){stop();if(egl_.display()!=EGL_NO_DISPLAY){eglMakeCurrent(egl_.display(),egl_.surface(),egl_.surface(),egl_.context());for(auto&kv:sources_){auto&s=kv.second;if(s.layer.textureId)glDeleteTextures(1,&s.layer.textureId);if(s.layer.auxTextureId)glDeleteTextures(1,&s.layer.auxTextureId);}sources_.clear();for(auto&l:luts_)if(l.second.texture)glDeleteTextures(1,&l.second.texture);luts_.clear();for(GLuint t:lutTexturesToDelete_)glDeleteTextures(1,&t);lutTexturesToDelete_.clear();if(program_)glDeleteProgram(program_),program_=0;if(overlayProgram_)glDeleteProgram(overlayProgram_),overlayProgram_=0;if(vbo_)glDeleteBuffers(1,&vbo_),vbo_=0;if(vao_)glDeleteVertexArrays(1,&vao_),vao_=0;}destroyWindow(preview_,previewWin_);destroyWindow(encoder_,encoderWin_);egl_.shutdown();}
+void GlCompositor::shutdown(){stop();if(egl_.display()!=EGL_NO_DISPLAY){eglMakeCurrent(egl_.display(),egl_.surface(),egl_.surface(),egl_.context());for(auto&kv:sources_){auto&s=kv.second;if(s.layer.textureId)glDeleteTextures(1,&s.layer.textureId);if(s.layer.auxTextureId)glDeleteTextures(1,&s.layer.auxTextureId);}sources_.clear();for(auto&l:luts_)if(l.second.texture)glDeleteTextures(1,&l.second.texture);luts_.clear();for(auto&t:sceneTargets_){if(t.second.fbo)glDeleteFramebuffers(1,&t.second.fbo);if(t.second.texture)glDeleteTextures(1,&t.second.texture);}sceneTargets_.clear();for(GLuint t:lutTexturesToDelete_)glDeleteTextures(1,&t);lutTexturesToDelete_.clear();if(program_)glDeleteProgram(program_),program_=0;if(overlayProgram_)glDeleteProgram(overlayProgram_),overlayProgram_=0;if(vbo_)glDeleteBuffers(1,&vbo_),vbo_=0;if(vao_)glDeleteVertexArrays(1,&vao_),vao_=0;}destroyWindow(preview_,previewWin_);destroyWindow(encoder_,encoderWin_);egl_.shutdown();}
 }

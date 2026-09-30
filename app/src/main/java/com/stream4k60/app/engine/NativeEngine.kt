@@ -41,6 +41,15 @@ object NativeEngine {
     external fun updateSourceRgba(sourceId: String, rgba: ByteArray, width: Int, height: Int): Boolean
     external fun updateSourceYuvDirect(sourceId: String, frame: java.nio.ByteBuffer, width: Int, height: Int, pixelFormat: Int): Boolean
     external fun removeSourceLayer(sourceId: String)
+
+    /** Offscreen canvas for a nested scene or group; sources owned by [key] draw into it. */
+    external fun setSceneTarget(key: String, width: Int, height: Int)
+    /** Frees scene canvases not listed in [keys]. */
+    external fun retainSceneTargets(keys: Array<String>)
+    /** Draws [sourceId] into the canvas [owner] ("" = program canvas). */
+    external fun setSourceOwner(sourceId: String, owner: String)
+    /** Makes [sourceId] a layer showing the scene canvas [key]. */
+    external fun setSourceSceneRef(sourceId: String, key: String)
     external fun setTransition(type: Int, durationMs: Int)
     external fun setTransitionProgress(progress: Float)
 

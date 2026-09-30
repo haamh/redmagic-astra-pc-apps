@@ -75,7 +75,7 @@ data class VideoFilterStage(
 object VideoFilterChain {
     /** Source types drawn by the compositor, which can take video filters. */
     val VIDEO_SOURCE_TYPES = setOf(
-        "CAMERA", "USB_CAPTURE", "SCREEN_CAPTURE", "MEDIA", "BROWSER", "IMAGE", "IMAGE_SLIDESHOW", "TEXT", "COLOR"
+        "CAMERA", "USB_CAPTURE", "SCREEN_CAPTURE", "MEDIA", "BROWSER", "IMAGE", "IMAGE_SLIDESHOW", "TEXT", "COLOR", "SCENE", "GROUP"
     )
 
     /** Must match kMaxFilterStages in gl_compositor.h. */

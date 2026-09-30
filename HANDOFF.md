@@ -10,7 +10,7 @@ The user wants an Android-native OBS-equivalent studio, with OBS project/profile
 
 The latest user direction is to optimize specifically for the Astra and use external UVC webcams/capture cards and their audio. The Astra's built-in camera, screen recording/capture and virtual-camera output are not required. Desktop display-capture sources in OBS imports must remain preserved but inactive. ADB previously detected the connected tablet as `NP05J` / `PQ84P01-EEA`, Android 15 (API 35). Finish implementation and review before installing; the app is not installed/launched.
 
-## Checkpoint 2026-09-30 (Claude Code session, Linux build)
+## Checkpoint 2026-09-30 (Linux build)
 
 - Repository is now on GitHub (`haamh/redmagic-astra-pc-apps`) with a `.gitignore` excluding `.gradle/`, `.kotlin/` and build outputs.
 - **Ordered video filter chain implemented.** Sources store `settings.videoFilters` (ordered array of `{id,type,name,enabled,settings}`); legacy `effects` objects are read and converted. Stage types: `COLOR_CORRECTION`, `CHROMA_KEY`, `COLOR_KEY`, `LUMA_KEY`. `NativeEngine.setSourceFilterChain` sends up to 8 enabled stages (16 floats each) to the compositor, which runs them in order in the layer fragment shader. `FilterEditorScreen` adds/removes/reorders/enables stages with a live preview; Cancel restores the saved chain.
@@ -18,6 +18,14 @@ The latest user direction is to optimize specifically for the Astra and use exte
 - Removed the unreferenced placeholder `VideoFilters.kt` / `AudioFilters.kt` composables.
 - Added JVM unit tests (`app/src/test`, `./gradlew :app:testDebugUnitTest`): 8 tests for filter-chain storage, legacy migration and native packing, all passing. The compositor GLSL passes `glslangValidator` as ES 3.20.
 - `:app:assembleDebug` succeeds on Linux (Android SDK platform 35, build-tools 34, NDK 27.0.12077973, CMake 3.22.1). Still not installed or run on the Astra.
+
+## Checkpoint 2026-09-30 (third pass)
+
+- Nested Scene and Group sources implemented end to end (renderer, studio, source list, properties, OBS import). See `OBS_PARITY_LEDGER.md` section 4.
+- Renderer: per-frame `prepareFrame` → `renderSceneTargets` (offscreen canvases, dependencies first) → `renderTo` per surface. Fixed two device-breaking bugs found by the new desktop GPU tests: CPU-uploaded and raw USB sources rendered upside down, and sources without filters were not drawn at all (sampler unit conflict). Run `app/src/test/native/run_compositor_test.sh` (Mesa) after native changes.
+- OBS import now matches versioned source ids (`color_source_v3`, `text_gdiplus_v3`, `slideshow_v2`…), which previously imported as unsupported; imports text extents.
+- Auto-sized text and media report their real size (`SourceNativeSizes`) so OBS scales apply to the real size.
+- 30 JVM unit tests + 14 GPU checks pass; `assembleDebug` succeeds. Not yet run on the Astra.
 
 ## Checkpoint 2026-09-30 (second pass)
 

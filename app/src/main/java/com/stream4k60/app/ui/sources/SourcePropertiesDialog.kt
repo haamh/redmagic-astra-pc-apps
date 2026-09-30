@@ -288,6 +288,14 @@ fun SourcePropertiesDialog(
                         SwitchField("Bold", bool("bold", false)) { set("bold", it) }
                         SwitchField("Italic", bool("italic", false)) { set("italic", it) }
                     }
+                    "GROUP" -> {
+                        Text("A group is its own canvas. Items inside it are positioned on this canvas, and the whole group moves, scales, crops and filters as one layer.", style = MaterialTheme.typography.bodySmall)
+                        NumberField("Group canvas width", "width", int("width", 1920), 16..8192, ::set) { valid -> updateNumberValidity("group.width", valid) }
+                        NumberField("Group canvas height", "height", int("height", 1080), 16..8192, ::set) { valid -> updateNumberValidity("group.height", valid) }
+                    }
+                    "SCENE" -> {
+                        Text("Shows another scene live, including its filters and nested scenes. Edit that scene's sources by switching to it; to show a different scene, add another Scene source.", style = MaterialTheme.typography.bodySmall)
+                    }
                     "COLOR" -> {
                         Field("Color (hex)", str("color", "#FF000000")) { set("color", it) }
                         NumberField("Width", "width", int("width", 1280), 1..7680, ::set) { valid -> updateNumberValidity("color.width", valid) }

@@ -178,15 +178,17 @@ class ObsProjectImporter(private val context: Context) {
         val sceneDefsByName = sceneNames.associateBy { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
         val sources = mutableListOf<SourceEntity>()
         val filters = mutableListOf<FilterEntity>()
-        for (scene in scenes) {
-            val sceneDef = sceneDefsByName[scene.name] ?: continue
-            val items = sceneDef.jsonObject["settings"]?.jsonObject?.get("items")?.jsonArray ?: JsonArray(emptyList())
+        val sceneIdByName = scenes.associate { it.name to it.id }
+        // Imports scene items into a scene, or group items into the group's container ("group:<id>").
+        fun importItems(items: JsonArray, containerId: String, depth: Int) {
             items.forEachIndexed { order, itemEl ->
                 val item = itemEl.jsonObject
                 val uuid = item["uuid"]?.jsonPrimitive?.contentOrNull
                 val sourceName = item["name"]?.jsonPrimitive?.contentOrNull ?: return@forEachIndexed
                 val def = uuid?.let(sourceByUuid::get) ?: sourceByName[sourceName] ?: return@forEachIndexed
-                val obsId = def["id"]?.jsonPrimitive?.contentOrNull ?: "unknown_source"
+                val rawObsId = def["id"]?.jsonPrimitive?.contentOrNull ?: "unknown_source"
+                // OBS versions its source ids (color_source_v3, text_gdiplus_v3, slideshow_v2…); match on the base id.
+                val obsId = rawObsId.replace(Regex("_v\\d+$"), "")
                 val sourceId = UUID.randomUUID().toString()
                 val mappedType = mapType(obsId)
                 when {
@@ -195,7 +197,7 @@ class ObsProjectImporter(private val context: Context) {
                     obsId in setOf("wasapi_input_capture", "wasapi_output_capture", "jack_output_capture") -> warnings += "Source '$sourceName' uses desktop audio capture ($obsId). It was mapped to an Android audio source; choose a device and grant playback capture where required."
                     mappedType.startsWith("OBS:") -> warnings += "Source '$sourceName' uses unsupported OBS source '$obsId'. Its source definition, settings, filters, visibility and canvas transform were preserved for remapping."
                 }
-                if (obsId == "slideshow" || obsId == "slideshow_v2") {
+                if (obsId == "slideshow") {
                     val transition = def["settings"]?.jsonObject?.get("transition")?.jsonPrimitive?.contentOrNull
                     if (!transition.isNullOrBlank() && !transition.equals("cut", true)) {
                         warnings += "Slideshow '$sourceName' uses the OBS '$transition' transition. Images and timing were imported, but slide transitions currently switch immediately."
@@ -216,6 +218,20 @@ class ObsProjectImporter(private val context: Context) {
                     val maxFps = 60
                     if (width > maxWidth || height > maxHeight || fps > maxFps) {
                         warnings += "Browser source '$sourceName' requests ${width}×${height} at ${fps} FPS. The Astra GPU-backed WebView surface path is capped at ${maxWidth}×${maxHeight} and ${maxFps} FPS; the imported page may render at a lower size/rate."
+                    }
+                }
+                if (obsId == "scene") {
+                    val nestedId = sceneIdByName[def["name"]?.jsonPrimitive?.contentOrNull ?: sourceName]
+                    if (nestedId == null) warnings += "Scene source '$sourceName' refers to a scene that is not in this collection."
+                    settings = buildJsonObject { for ((k, v) in settings) put(k, v); nestedId?.let { put("sceneId", it) } }
+                }
+                if (obsId == "group") {
+                    // A group is its own canvas of cx×cy; its items are positioned inside it.
+                    val cx = settings["cx"]?.jsonPrimitive?.intOrNull ?: 0
+                    val cy = settings["cy"]?.jsonPrimitive?.intOrNull ?: 0
+                    settings = buildJsonObject {
+                        for ((k, v) in settings) if (k != "items") put(k, v)
+                        if (cx > 0 && cy > 0) { put("width", cx); put("height", cy) }
                     }
                 }
                 val importedFilters = def["filters"]?.jsonArray ?: JsonArray(emptyList())
@@ -262,14 +278,14 @@ class ObsProjectImporter(private val context: Context) {
                 }
                 sources += SourceEntity(
                     id = sourceId,
-                    sceneId = scene.id,
+                    sceneId = containerId,
                     name = sourceName,
                     type = mappedType,
                     sortOrder = order,
                     visible = item["visible"]?.jsonPrimitive?.booleanOrNull ?: item["show"]?.jsonPrimitive?.booleanOrNull ?: true,
                     locked = item["locked"]?.jsonPrimitive?.booleanOrNull ?: false,
                     configJson = buildJsonObject {
-                        put("obsId", obsId)
+                        put("obsId", rawObsId)
                         put("uuid", def["uuid"] ?: JsonNull)
                         put("settings", settings)
                         put("audio", audio)
@@ -279,6 +295,10 @@ class ObsProjectImporter(private val context: Context) {
                     transformJson = transform.toString(),
                     audioJson = audio.toString()
                 )
+                if (obsId == "group" && depth < 4) {
+                    val children = def["settings"]?.jsonObject?.get("items")?.jsonArray ?: JsonArray(emptyList())
+                    importItems(children, "group:$sourceId", depth + 1)
+                }
                 importedFilters.forEachIndexed { idx, filterEl ->
                     val fj = filterEl.jsonObject
                     val filterName = fj["name"]?.jsonPrimitive?.contentOrNull ?: "Filter ${idx + 1}"
@@ -295,6 +315,10 @@ class ObsProjectImporter(private val context: Context) {
                     )
                 }
             }
+        }
+        for (scene in scenes) {
+            val sceneDef = sceneDefsByName[scene.name] ?: continue
+            importItems(sceneDef.jsonObject["settings"]?.jsonObject?.get("items")?.jsonArray ?: JsonArray(emptyList()), scene.id, 0)
         }
         val active = scenes.firstOrNull { it.active }?.id ?: scenes.firstOrNull()?.id
         return ImportedCollection(SceneCollectionEntity(collectionId, name, active, 0), scenes, sources, filters)
@@ -462,7 +486,7 @@ class ObsProjectImporter(private val context: Context) {
         if (obsId == "ffmpeg_source") {
             settings["local_file"]?.jsonPrimitive?.contentOrNull?.let { put("file", it) }
         }
-        if (obsId == "browser_source" || obsId == "browser_source_v2") {
+        if (obsId == "browser_source") {
             if (settings["width"] == null) settings["custom_width"]?.jsonPrimitive?.intOrNull?.let { put("width", it) }
             if (settings["height"] == null) settings["custom_height"]?.jsonPrimitive?.intOrNull?.let { put("height", it) }
         }
@@ -487,7 +511,12 @@ class ObsProjectImporter(private val context: Context) {
                 if (hex != null) put("color", hex)
             }
         }
-        if (obsId == "text_gdiplus_v2" || obsId == "text_ft2_source") {
+        if (obsId == "text_gdiplus" && settings["extents"]?.jsonPrimitive?.booleanOrNull == true) {
+            // OBS "Use custom text extents": a fixed text box instead of sizing to the text.
+            settings["extents_cx"]?.jsonPrimitive?.intOrNull?.takeIf { it > 0 }?.let { put("width", it) }
+            settings["extents_cy"]?.jsonPrimitive?.intOrNull?.takeIf { it > 0 }?.let { put("height", it) }
+        }
+        if (obsId == "text_gdiplus" || obsId == "text_ft2_source") {
             val font = settings["font"] as? JsonObject
             font?.get("face")?.jsonPrimitive?.contentOrNull?.let { put("fontFamily", it) }
             font?.get("size")?.jsonPrimitive?.intOrNull?.let { put("fontSize", it) }
@@ -500,7 +529,7 @@ class ObsProjectImporter(private val context: Context) {
             color?.jsonPrimitive?.contentOrNull?.let(::obsColorHex)?.let { put("textColor", it) }
             settings["bk_color"]?.jsonPrimitive?.contentOrNull?.let(::obsColorHex)?.let { put("backgroundColor", it) }
         }
-        if (obsId == "slideshow" || obsId == "slideshow_v2") {
+        if (obsId == "slideshow") {
             val files = settings["files"] as? JsonArray
             val paths = files?.mapNotNull { entry ->
                 when (entry) {
@@ -546,7 +575,7 @@ class ObsProjectImporter(private val context: Context) {
         }.getOrNull()?.takeIf(File::isFile) ?: return settings
 
         val dimensions = when (obsId) {
-            "image_source", "slideshow", "slideshow_v2" -> runCatching {
+            "image_source", "slideshow" -> runCatching {
                 val options = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 android.graphics.BitmapFactory.decodeFile(file.absolutePath, options)
                 options.outWidth to options.outHeight
@@ -578,16 +607,17 @@ class ObsProjectImporter(private val context: Context) {
     }
 
     private fun mapType(id: String): String = when (id) {
-        "browser_source", "browser_source_v2" -> "BROWSER"
+        "browser_source" -> "BROWSER"
         "image_source" -> "IMAGE"
         "ffmpeg_source" -> "MEDIA"
-        "text_gdiplus_v2", "text_ft2_source" -> "TEXT"
+        "text_gdiplus", "text_ft2_source" -> "TEXT"
         "color_source" -> "COLOR"
         "slideshow" -> "IMAGE_SLIDESHOW"
         "av_capture_input", "dshow_input", "v4l2_input" -> "USB_CAPTURE"
         "wasapi_input_capture" -> "AUDIO_INPUT"
         "wasapi_output_capture", "jack_output_capture" -> "PLAYBACK_AUDIO"
-        "group" -> "OBS:GROUP"
+        "scene" -> "SCENE"
+        "group" -> "GROUP"
         else -> "OBS:$id"
     }
 

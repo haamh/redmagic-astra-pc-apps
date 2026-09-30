@@ -32,11 +32,30 @@ import javax.inject.Inject
 
 data class SceneItem(val id:String,val name:String,val isActive:Boolean)
 data class SourceItem(val id:String,val name:String,val type:String,val isVisible:Boolean,val isLocked:Boolean,val configJson:String,val transformJson:String="{}")
+/**
+ * A source as the compositor draws it. [owner] is "" for the program canvas, or the key of the nested scene /
+ * group canvas it draws into. [containerKey] is set for SCENE and GROUP sources: the canvas they show.
+ */
+data class RenderSource(val item:SourceItem,val owner:String,val z:Int,val containerKey:String?)
+object NestedSources {
+ const val GROUP_PREFIX="group:"
+ const val MAX_DEPTH=6
+ val CONTAINER_TYPES=setOf("SCENE","GROUP")
+ /** Canvas key a SCENE/GROUP source shows; group children are stored under this key as their sceneId. */
+ fun containerKey(item:SourceItem):String? = when(item.type.uppercase()){
+  "GROUP"->GROUP_PREFIX+item.id
+  "SCENE"->runCatching{org.json.JSONObject(item.configJson).let{it.optJSONObject("settings")?:it}.optString("sceneId")}.getOrNull()?.takeIf{it.isNotBlank()}
+  else->null
+ }
+}
 enum class StudioStreamState{IDLE,CONNECTING,LIVE,RECONNECTING,STOPPING,ERROR}
 enum class StudioRecordState{IDLE,RECORDING,PAUSED,STOPPING,ERROR}
 
 @HiltViewModel class MainStudioViewModel @Inject constructor(private val repo:SceneRepository,private val engine:StreamEngine,private val settingsRepository:SettingsRepository,@ApplicationContext private val context:Context):ViewModel(){
  private val sourceTransformMutex=Mutex()
+ private val _renderSources=MutableStateFlow<List<RenderSource>>(emptyList());val renderSources=_renderSources.asStateFlow()
+ /** Items inside each group of the active scene (keyed by group source id), bottom layer first. */
+ private val _groupChildren=MutableStateFlow<Map<String,List<SourceItem>>>(emptyMap());val groupChildren=_groupChildren.asStateFlow()
  @Volatile private var syncAudioGraphErrors: Set<String> = emptySet()
  private val collectionPrefs=context.getSharedPreferences("stream4k_studio",Context.MODE_PRIVATE)
  private val _currentSceneCollection=MutableStateFlow("Default");val currentSceneCollection=_currentSceneCollection.asStateFlow()
@@ -87,8 +106,89 @@ enum class StudioRecordState{IDLE,RECORDING,PAUSED,STOPPING,ERROR}
   val ss=repo.loadScenes(c.id);_scenes.value=ss.map{SceneItem(it.id,it.name,it.active)}
   val selectedScene=ss.firstOrNull{it.id==c.activeSceneId} ?: ss.firstOrNull{it.active} ?: ss.firstOrNull()
   _activeScene.value=selectedScene?.let{SceneItem(it.id,it.name,true)}
-  val active=_activeScene.value;_sources.value=if(active!=null)repo.loadSources(active.id).map{SourceItem(it.id,it.name,it.type,it.visible,it.locked,it.configJson,it.transformJson)}else emptyList()
+  val active=_activeScene.value;_sources.value=if(active!=null)repo.loadSources(active.id).map(::toItem)else emptyList()
+  _renderSources.value=if(active!=null)expandRenderSources(_sources.value,active.id)else emptyList()
+  _groupChildren.value=_sources.value.filter{it.type.equals("GROUP",true)}.associate{g->g.id to repo.loadSources(NestedSources.GROUP_PREFIX+g.id).map(::toItem)}
   syncAudioGraph()
+ }
+ private fun toItem(it:SourceEntity)=SourceItem(it.id,it.name,it.type,it.visible,it.locked,it.configJson,it.transformJson)
+ /** Flattens the active scene plus every visible nested scene/group it shows, each nested canvas once. */
+ private suspend fun expandRenderSources(top:List<SourceItem>,rootSceneId:String):List<RenderSource>{
+  val out=mutableListOf<RenderSource>()
+  val expanded=mutableSetOf<String>()
+  suspend fun walk(items:List<SourceItem>,owner:String,depth:Int,path:Set<String>){
+   items.forEachIndexed{z,item->
+    val key=NestedSources.containerKey(item)
+    out+=RenderSource(item,owner,z,key)
+    if(key==null||!item.isVisible||depth>=NestedSources.MAX_DEPTH||key in path||!expanded.add(key))return@forEachIndexed
+    walk(repo.loadSources(key).map(::toItem),key,depth+1,path+key)
+   }
+  }
+  walk(top,"",0,setOf(rootSceneId))
+  return out
+ }
+ /** Containers whose rows can be edited from the studio: the active scene and the groups it shows. */
+ private fun editableContainers():List<String> = (listOfNotNull(_activeScene.value?.id)+
+  _renderSources.value.mapNotNull{it.containerKey}+
+  _groupChildren.value.keys.map{NestedSources.GROUP_PREFIX+it}).distinct()
+ private suspend fun rowFor(id:String):SourceEntity?{
+  for(container in editableContainers())repo.loadSources(container).firstOrNull{it.id==id}?.let{return it}
+  return null
+ }
+ /** Deletes a source and, for groups, everything inside them. */
+ private suspend fun deleteDeep(row:SourceEntity){
+  if(row.type.equals("GROUP",true))repo.loadSources(NestedSources.GROUP_PREFIX+row.id).forEach{deleteDeep(it)}
+  repo.deleteSource(row.id)
+ }
+ /** Copies a source into [container]; groups are copied with their contents. */
+ private suspend fun copyDeep(row:SourceEntity,container:String,sortOrder:Int,name:String):SourceEntity{
+  val copy=row.copy(id=UUID.randomUUID().toString(),sceneId=container,name=name,sortOrder=sortOrder,visible=true,locked=false)
+  repo.saveSources(listOf(copy))
+  if(row.type.equals("GROUP",true))repo.loadSources(NestedSources.GROUP_PREFIX+row.id).forEach{child->copyDeep(child,NestedSources.GROUP_PREFIX+copy.id,child.sortOrder,child.name)}
+  return copy
+ }
+ /** Scenes that [sceneId] can show without creating a loop. */
+ suspend fun nestableScenes():List<SceneItem>{
+  val active=_activeScene.value?:return emptyList()
+  val c=repo.collections().first().firstOrNull{it.id==_activeSceneCollectionId.value}?:return emptyList()
+  val all=repo.loadScenes(c.id)
+  suspend fun reaches(from:String,target:String,seen:MutableSet<String>):Boolean{
+   if(from==target)return true
+   if(!seen.add(from))return false
+   return repo.loadSources(from).any{row->NestedSources.containerKey(toItem(row))?.let{reaches(it,target,seen)}==true}
+  }
+  return all.filter{it.id!=active.id&&!reaches(it.id,active.id,mutableSetOf())}.map{SceneItem(it.id,it.name,false)}
+ }
+ fun addSceneSource(sceneId:String){viewModelScope.launch{
+  val s=_activeScene.value?:return@launch
+  val name=repo.collections().first().firstOrNull{it.id==_activeSceneCollectionId.value}?.let{c->repo.loadScenes(c.id).firstOrNull{it.id==sceneId}?.name}?:"Scene"
+  val rows=repo.loadSources(s.id)
+  repo.saveSources(listOf(SourceEntity(UUID.randomUUID().toString(),s.id,name,"SCENE",rows.size,true,false,"{\"sceneId\":\"$sceneId\"}","{}","{}")))
+  load()
+ }}
+ /** Moves a source into a group (keeping its canvas position when the group sits at the origin unscaled). */
+ fun moveSourceIntoGroup(id:String,groupId:String){viewModelScope.launch{
+  val row=rowFor(id)?:return@launch
+  if(row.id==groupId)return@launch
+  val container=NestedSources.GROUP_PREFIX+groupId
+  // A group cannot contain itself or its ancestors.
+  if(row.type.equals("GROUP",true)&&(container==NestedSources.GROUP_PREFIX+row.id||isInside(groupId,NestedSources.GROUP_PREFIX+row.id)))return@launch
+  repo.saveSources(listOf(row.copy(sceneId=container,sortOrder=repo.loadSources(container).size)))
+  load()
+ }}
+ fun moveSourceOutOfGroup(id:String){viewModelScope.launch{
+  val row=rowFor(id)?:return@launch
+  if(!row.sceneId.startsWith(NestedSources.GROUP_PREFIX))return@launch
+  val s=_activeScene.value?:return@launch
+  repo.saveSources(listOf(row.copy(sceneId=s.id,sortOrder=repo.loadSources(s.id).size)))
+  load()
+ }}
+ private suspend fun isInside(groupId:String,container:String):Boolean{
+  for(row in repo.loadSources(container)){
+   if(row.id==groupId)return true
+   if(row.type.equals("GROUP",true)&&isInside(groupId,NestedSources.GROUP_PREFIX+row.id))return true
+  }
+  return false
  }
  fun selectSceneCollection(id:String){
   val collection=_sceneCollections.value.firstOrNull{it.id==id}?:return
@@ -115,23 +215,24 @@ enum class StudioRecordState{IDLE,RECORDING,PAUSED,STOPPING,ERROR}
 private suspend fun activateScene(collectionId:String,id:String){repo.loadScenes(collectionId).forEach{repo.saveScene(it.copy(active=it.id==id))};repo.saveCollection(repo.collections().first().firstOrNull{it.id==collectionId}?.copy(activeSceneId=id)?:return);load()}
 private fun transitionDurationMs():Int=when(_transition.value){"Fast Fade"->180;"Slow Fade"->600;else->300}
 private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
- fun addSource(type:String){viewModelScope.launch{val s=_activeScene.value?:return@launch;val rows=repo.loadSources(s.id);val id=UUID.randomUUID().toString();repo.saveSources(listOf(SourceEntity(id,s.id,displayNameFor(type,rows.size),type,rows.size,true,false,defaultConfigFor(type),"{}","{}")));load()}}
- fun removeSource(id:String?=null){viewModelScope.launch{val s=_activeScene.value?:return@launch;val rows=repo.loadSources(s.id);val target=id?.let{key->rows.firstOrNull{it.id==key}}?:rows.lastOrNull();target?.let{repo.deleteSource(it.id)};load()}}
- fun renameSource(id:String,name:String){viewModelScope.launch{val s=_activeScene.value?:return@launch;val clean=name.trim().take(80);if(clean.isEmpty())return@launch;repo.loadSources(s.id).firstOrNull{it.id==id}?.let{repo.saveSources(listOf(it.copy(name=clean)))};load()}}
+ fun addSource(type:String){viewModelScope.launch{val s=_activeScene.value?:return@launch;val rows=repo.loadSources(s.id);val id=UUID.randomUUID().toString()
+  // A new group's canvas matches the program canvas, so items moved into it keep their positions.
+  val config=if(type.equals("GROUP",true))settingsRepository.videoConfig.first().let{"{\"width\":${it.baseResWidth},\"height\":${it.baseResHeight}}"}else defaultConfigFor(type)
+  repo.saveSources(listOf(SourceEntity(id,s.id,displayNameFor(type,rows.size),type,rows.size,true,false,config,"{}","{}")));load()}}
+ fun removeSource(id:String?=null){viewModelScope.launch{val s=_activeScene.value?:return@launch;val target=id?.let{rowFor(it)}?:repo.loadSources(s.id).lastOrNull();target?.let{deleteDeep(it)};load()}}
+ fun renameSource(id:String,name:String){viewModelScope.launch{val clean=name.trim().take(80);if(clean.isEmpty())return@launch;rowFor(id)?.let{repo.saveSources(listOf(it.copy(name=clean)))};load()}}
  fun duplicateSource(id:String){viewModelScope.launch{
-  val s=_activeScene.value?:return@launch
-  val rows=repo.loadSources(s.id).sortedBy{it.sortOrder}
-  val original=rows.firstOrNull{it.id==id}?:return@launch
+  val original=rowFor(id)?:return@launch
+  val rows=repo.loadSources(original.sceneId).sortedBy{it.sortOrder}
   val insertion=original.sortOrder+1
-  val shifted=rows.map{if(it.sortOrder>=insertion)it.copy(sortOrder=it.sortOrder+1)else it}
-  val duplicate=original.copy(id=UUID.randomUUID().toString(),name="${original.name} copy".take(80),sortOrder=insertion,visible=true,locked=false)
-  repo.saveSources(shifted+duplicate)
+  repo.saveSources(rows.filter{it.sortOrder>=insertion}.map{it.copy(sortOrder=it.sortOrder+1)})
+  copyDeep(original,original.sceneId,insertion,"${original.name} copy".take(80))
   load()
  }}
  fun resetSourceTransform(id:String){updateSourceTransform(id,"{}")}
  fun moveSourceInStack(id:String,displayDelta:Int){viewModelScope.launch{
-  val scene=_activeScene.value?:return@launch
-  val displayed=repo.loadSources(scene.id).sortedBy{it.sortOrder}.asReversed().toMutableList()
+  val container=rowFor(id)?.sceneId?:return@launch
+  val displayed=repo.loadSources(container).sortedBy{it.sortOrder}.asReversed().toMutableList()
   val from=displayed.indexOfFirst{it.id==id};if(from<0)return@launch
   val to=(from+displayDelta).coerceIn(0,displayed.lastIndex);if(to==from)return@launch
   val moved=displayed.removeAt(from);displayed.add(to,moved)
@@ -139,16 +240,16 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
   load()
  }}
  fun moveSourceToDisplayIndex(id:String,targetIndex:Int){viewModelScope.launch{
-  val scene=_activeScene.value?:return@launch
-  val displayed=repo.loadSources(scene.id).sortedBy{it.sortOrder}.asReversed().toMutableList()
+  val container=rowFor(id)?.sceneId?:return@launch
+  val displayed=repo.loadSources(container).sortedBy{it.sortOrder}.asReversed().toMutableList()
   val from=displayed.indexOfFirst{it.id==id};if(from<0)return@launch
   val to=targetIndex.coerceIn(0,displayed.lastIndex);if(to==from)return@launch
   val moved=displayed.removeAt(from);displayed.add(to,moved)
   repo.saveSources(displayed.asReversed().mapIndexed{index,row->row.copy(sortOrder=index)})
   load()
  }}
- fun toggleSourceVisibility(id:String){viewModelScope.launch{val s=_activeScene.value?:return@launch;repo.loadSources(s.id).find{it.id==id}?.let{repo.saveSources(listOf(it.copy(visible=!it.visible)))};load()}}
- fun toggleSourceLock(id:String){viewModelScope.launch{val s=_activeScene.value?:return@launch;repo.loadSources(s.id).find{it.id==id}?.let{repo.saveSources(listOf(it.copy(locked=!it.locked)))};load()}}
+ fun toggleSourceVisibility(id:String){viewModelScope.launch{rowFor(id)?.let{repo.saveSources(listOf(it.copy(visible=!it.visible)))};load()}}
+ fun toggleSourceLock(id:String){viewModelScope.launch{rowFor(id)?.let{repo.saveSources(listOf(it.copy(locked=!it.locked)))};load()}}
  private fun defaultConfigFor(type:String)=when(type.uppercase()){
   "CAMERA"->"{\"facing\":\"BACK\",\"width\":1920,\"height\":1080,\"fps\":30}"
   "USB_CAPTURE"->"{\"deviceId\":-1,\"width\":1920,\"height\":1080,\"fps\":30,\"format\":\"MJPEG\"}"
@@ -171,15 +272,17 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
   "PLAYBACK_AUDIO"->"{\"enabled\":true,\"sourceId\":\"android_playback_audio\",\"volume\":1.0,\"monitoring\":\"OUTPUT_ONLY\"}"
   else->"{}"
  }
- private fun displayNameFor(type:String,n:Int)=when(type.uppercase()){
+ private fun displayNameFor(type:String,n:Int)=when(type.uppercase()){"GROUP"->"Group ${n+1}";
   "CAMERA"->"Camera ${n+1}";"USB_CAPTURE"->"USB Capture ${n+1}";"SCREEN_CAPTURE"->"Screen Capture";"BROWSER"->"Browser ${n+1}";"IMAGE"->"Image ${n+1}";"IMAGE_SLIDESHOW"->"Image Slideshow ${n+1}";"MEDIA"->"Media ${n+1}";"TEXT"->"Text ${n+1}";"COLOR"->"Color ${n+1}";"AUDIO_INPUT"->"Audio Input ${n+1}";"AUDIO_OUTPUT"->"Monitor Output ${n+1}";"PLAYBACK_AUDIO"->"Android Playback Audio";else->"$type ${n+1}"
  }
+ /** Every source the program actually shows, including the contents of nested scenes and groups. */
+ private fun renderedItems():List<SourceItem> = _renderSources.value.map{it.item}
  private fun syncAudioGraph() {
   val routes=audioRoutes()
-  val playbackSource=_sources.value.firstOrNull{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}
+  val playbackSource=renderedItems().firstOrNull{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}
   val playbackRoute=playbackSource?.let(::parsePlaybackRoute)
   val monitor=monitorDeviceId()
-  val audioSources=_sources.value.filter{it.isVisible&&(it.type.uppercase() in setOf("AUDIO_INPUT","AUDIO_OUTPUT","PLAYBACK_AUDIO") || it.type.equals("USB_CAPTURE",true)&&sourceAudioSettings(it.configJson).optInt("audioDeviceId",-1)>=0)}
+  val audioSources=renderedItems().filter{it.isVisible&&(it.type.uppercase() in setOf("AUDIO_INPUT","AUDIO_OUTPUT","PLAYBACK_AUDIO") || it.type.equals("USB_CAPTURE",true)&&sourceAudioSettings(it.configJson).optInt("audioDeviceId",-1)>=0)}
   val reportIds=audioSources.map{it.id}.toSet()
   val missingDeviceIds=audioSources.filter{source->
    source.type.equals("AUDIO_INPUT",true)&&sourceAudioSettings(source.configJson).optInt("deviceId",-1)<0 ||
@@ -202,7 +305,7 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
      }
   }
  }
- fun updateSourceConfig(id:String,config:String){viewModelScope.launch{val s=_activeScene.value?:return@launch;repo.loadSources(s.id).find{it.id==id}?.let{row->
+ fun updateSourceConfig(id:String,config:String){viewModelScope.launch{rowFor(id)?.let{row->
   repo.saveSources(listOf(row.copy(configJson=config)))
   if(row.type.equals("AUDIO_INPUT",true)) runCatching { engine.updateAudioRoute(parseAudioRoute(SourceItem(row.id,row.name,row.type,row.visible,row.locked,config,row.transformJson))) }
    .onSuccess { SourceRuntimeErrors.clear(id) }
@@ -238,11 +341,11 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
   return settings
  }
  fun updateSourceTransform(id:String,transform:String){
-  val sceneId=_activeScene.value?.id?:return
-  val current=_sources.value.firstOrNull{it.id==id}?:return
+  val current=_renderSources.value.firstOrNull{it.item.id==id}?.item?:_groupChildren.value.values.flatten().firstOrNull{it.id==id}?:return
   if(current.isLocked)return
   _sources.value=_sources.value.map{if(it.id==id)it.copy(transformJson=transform)else it}
-  viewModelScope.launch{sourceTransformMutex.withLock{repo.loadSources(sceneId).firstOrNull{it.id==id}?.let{row->if(!row.locked)repo.saveSources(listOf(row.copy(transformJson=transform)))}}}
+  _renderSources.value=_renderSources.value.map{if(it.item.id==id)it.copy(item=it.item.copy(transformJson=transform))else it}
+  viewModelScope.launch{sourceTransformMutex.withLock{rowFor(id)?.let{row->if(!row.locked)repo.saveSources(listOf(row.copy(transformJson=transform)))}}}
  }
  private fun parseAudioRoute(src:SourceItem):AudioInputRoute{
   val j=sourceAudioSettings(src.configJson)
@@ -252,7 +355,7 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
   val j=sourceAudioSettings(src.configJson)
   return AudioInputRoute(NativeAudioBridge.PLAYBACK_SOURCE_ID,-1,j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f),j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f),j.optBoolean("muted",false),runCatching{AudioMonitoring.valueOf(j.optString("monitoring","OUTPUT_ONLY"))}.getOrDefault(AudioMonitoring.OUTPUT_ONLY),j.optInt("syncOffsetMs",0).coerceIn(-2000,2000),j.optBoolean("solo",false),AudioFilterChain.noiseGate(src.configJson))
  }
- private fun audioRoutes(): List<AudioInputRoute> = _sources.value.filter { (it.type.equals("AUDIO_INPUT", true) || it.type.equals("USB_CAPTURE", true)) && it.isVisible }.mapNotNull { src ->
+ private fun audioRoutes(): List<AudioInputRoute> = renderedItems().filter { (it.type.equals("AUDIO_INPUT", true) || it.type.equals("USB_CAPTURE", true)) && it.isVisible }.mapNotNull { src ->
   runCatching {
    val isCaptureCard=src.type.equals("USB_CAPTURE",true)
    val j=sourceAudioSettings(src.configJson); val id=j.optInt(if(isCaptureCard)"audioDeviceId" else "deviceId",-1); if(id<0) null else AudioInputRoute(
@@ -263,13 +366,13 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
    )
   }.getOrNull()
  }
- private fun mediaAudioRoutes():List<AudioInputRoute> = _sources.value.filter{it.type.equals("MEDIA",true)&&it.isVisible}.mapNotNull{src->
+ private fun mediaAudioRoutes():List<AudioInputRoute> = renderedItems().filter{it.type.equals("MEDIA",true)&&it.isVisible}.mapNotNull{src->
   runCatching{
    val j=sourceSettings(src.configJson);val audioId="media_audio_${src.id}"
    AudioInputRoute(audioId,-1,j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f),j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f),j.optBoolean("muted",!j.optBoolean("audioEnabled",true)),runCatching{AudioMonitoring.valueOf(j.optString("monitoring","OUTPUT_ONLY"))}.getOrDefault(AudioMonitoring.OUTPUT_ONLY),j.optInt("syncOffsetMs",0).coerceIn(-2000,2000),j.optBoolean("solo",false),AudioFilterChain.noiseGate(src.configJson))
   }.getOrNull()
  }
- private fun monitorDeviceId(): Int? = _sources.value.firstOrNull { it.type.equals("AUDIO_OUTPUT",true) && it.isVisible }?.let { runCatching { sourceSettings(it.configJson).optInt("deviceId",-1).takeIf { id -> id>=0 } }.getOrNull() }
+ private fun monitorDeviceId(): Int? = renderedItems().firstOrNull { it.type.equals("AUDIO_OUTPUT",true) && it.isVisible }?.let { runCatching { sourceSettings(it.configJson).optInt("deviceId",-1).takeIf { id -> id>=0 } }.getOrNull() }
  fun audioPeak(sourceId:String):Float = engine.audioPeak(sourceId)
  fun togglePrimaryMicMute(){
   val src=_sources.value.firstOrNull{it.type.equals("AUDIO_INPUT",true)} ?: return
@@ -285,13 +388,13 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
   updateSourceConfig(src.id,j.toString())
  }
  fun startStreaming()=viewModelScope.launch{
-  val routes=audioRoutes(); val monitor=monitorDeviceId(); val playback=_sources.value.any{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}
+  val routes=audioRoutes(); val monitor=monitorDeviceId(); val playback=renderedItems().any{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}
   _streamError.value=null
   runCatching{engine.startStreaming(_streamConfig.value.copy(audioDeviceIds=routes.map{it.deviceId},audioInputs=routes,monitorDeviceId=monitor,monitorEnabled=monitor!=null,audioPlaybackCaptureEnabled=playback))}.onFailure{_streamError.value=it.message ?: "Streaming could not start."}
  }
  fun stopStreaming()=viewModelScope.launch{engine.stopStreaming()}
  fun startRecording()=viewModelScope.launch{
-  val routes=audioRoutes(); val monitor=monitorDeviceId(); val playback=_sources.value.any{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}
+  val routes=audioRoutes(); val monitor=monitorDeviceId(); val playback=renderedItems().any{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}
   runCatching{engine.startRecording(_recordConfig.value.copy(audioDeviceIds=routes.map{it.deviceId},audioInputs=routes,monitorDeviceId=monitor,monitorEnabled=monitor!=null,audioPlaybackCaptureEnabled=playback))}
  }
  fun stopRecording()=viewModelScope.launch{engine.stopRecording()}

@@ -1,5 +1,6 @@
 package com.stream4k60.app.ui.main.components
 
+import com.stream4k60.app.engine.SourceNativeSizes
 import com.stream4k60.app.ui.main.SourceItem
 import org.json.JSONObject
 import kotlin.math.abs
@@ -49,9 +50,13 @@ internal fun resolveSourceTransform(source: SourceItem, canvasWidth: Int, canvas
     val transform = runCatching { JSONObject(source.transformJson) }.getOrDefault(JSONObject())
     val config = runCatching { JSONObject(source.configJson) }.getOrDefault(JSONObject())
     val settings = config.optJSONObject("settings") ?: config
-    val fullCanvas = source.type.uppercase() in setOf("CAMERA", "USB_CAPTURE", "SCREEN_CAPTURE", "MEDIA")
-    val inputWidth = settings.optDouble("width", config.optDouble("width", if (fullCanvas) canvasWidth.toDouble() else 1280.0)).toFloat().coerceAtLeast(1f)
-    val inputHeight = settings.optDouble("height", config.optDouble("height", if (fullCanvas) canvasHeight.toDouble() else 720.0)).toFloat().coerceAtLeast(1f)
+    val fullCanvas = source.type.uppercase() in setOf("CAMERA", "USB_CAPTURE", "SCREEN_CAPTURE", "MEDIA", "SCENE")
+    // Explicit size, else the size measured at runtime (auto-sized text, media video size), else a default.
+    val native = SourceNativeSizes.get(source.id)
+    val defaultWidth = native?.first?.toDouble() ?: if (fullCanvas) canvasWidth.toDouble() else 1280.0
+    val defaultHeight = native?.second?.toDouble() ?: if (fullCanvas) canvasHeight.toDouble() else 720.0
+    val inputWidth = settings.optDouble("width", config.optDouble("width", defaultWidth)).toFloat().coerceAtLeast(1f)
+    val inputHeight = settings.optDouble("height", config.optDouble("height", defaultHeight)).toFloat().coerceAtLeast(1f)
     val rawWidth = transform.optDouble("width", inputWidth.toDouble()).toFloat().coerceAtLeast(1f)
     val rawHeight = transform.optDouble("height", inputHeight.toDouble()).toFloat().coerceAtLeast(1f)
     val position = transform.optJSONObject("pos") ?: JSONObject()

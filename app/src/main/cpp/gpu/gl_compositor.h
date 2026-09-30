@@ -35,6 +35,10 @@ struct SourceLayer {
     int filterTypes[kMaxFilterStages]={};
     float filterParams[kMaxFilterStages*kFilterStageFloats]={};
     RawPixelFormat rawFormat = RawPixelFormat::NONE;
+    // Render target this layer is drawn into: "" is the program canvas, otherwise a nested scene/group key.
+    std::string owner;
+    // Non-empty for a scene/group source: the layer samples that scene's offscreen render.
+    std::string sceneRef;
     int rawWidth=0,rawHeight=0;
     float texMatrix[16];
     SourceLayer(){for(int i=0;i<16;++i)texMatrix[i]=(i%5==0)?1.f:0.f;}
@@ -53,6 +57,11 @@ public:
     void setLut(const std::string& id,int slot,const std::string& key,int size,const uint8_t* rgb,const float* domainMin,const float* domainMax);
     void clearLut(const std::string& id,int slot);
     std::string lutKey(const std::string& id,int slot);
+    // Nested scenes and groups: each key renders into its own offscreen canvas of the given size.
+    void setSceneTarget(const std::string& key,int width,int height);
+    void retainSceneTargets(const std::vector<std::string>& keys);
+    void setSourceOwner(const std::string& id,const std::string& owner);
+    void setSourceSceneRef(const std::string& id,const std::string& key);
     bool updateRgba(const std::string& id,const uint8_t* pixels,size_t bytes,int width,int height);
     bool updateRaw(const std::string& id,const uint8_t* pixels,size_t bytes,int width,int height,RawPixelFormat format);
     bool setPreviewSurface(JNIEnv* env,jobject surface);
@@ -97,6 +106,10 @@ private:
     // Keyed by "<sourceId>#<slot>"; survives source surface re-creation.
     std::map<std::string,Lut> luts_;
     std::vector<GLuint> lutTexturesToDelete_;
+    struct SceneTarget { int width=0,height=0; GLuint fbo=0,texture=0; int allocW=0,allocH=0; };
+    std::map<std::string,SceneTarget> sceneTargets_;
+    std::vector<std::pair<GLuint,GLuint>> sceneTargetsToDelete_; // fbo, texture
+    std::map<std::string,std::string> owners_;
     mutable std::mutex m_;
     std::thread thread_;
     std::atomic<bool> running_{false};
@@ -105,7 +118,10 @@ private:
     JavaVM* vm_=nullptr;
     bool setupGl();
     void loop();
-    void renderTo(EGLSurface target,int width,int height,int canvasWidth,int canvasHeight);
+    std::vector<SourceLayer> prepareFrame();
+    void renderSceneTargets(const std::vector<SourceLayer>& layers);
+    void drawLayers(const std::vector<SourceLayer>& layers,const std::string& owner,int canvasWidth,int canvasHeight,bool toOffscreen);
+    void renderTo(EGLSurface target,int width,int height,int canvasWidth,int canvasHeight,const std::vector<SourceLayer>& layers);
     void destroyWindow(EGLSurface& s,ANativeWindow*& w);
     Source* source(const std::string&id);
     void applyPendingFilters(SourceLayer& layer,const std::string&id);

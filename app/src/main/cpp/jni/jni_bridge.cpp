@@ -59,6 +59,15 @@ extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_se
 }
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_clearSourceLut(JNIEnv*e,jclass,jstring id,jint slot){g.clearLut(jstr(e,id),slot);}
 extern "C" JNIEXPORT jstring JNICALL Java_com_stream4k60_app_engine_NativeEngine_getSourceLutKey(JNIEnv*e,jclass,jstring id,jint slot){return e->NewStringUTF(g.lutKey(jstr(e,id),slot).c_str());}
+extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSceneTarget(JNIEnv*e,jclass,jstring key,jint w,jint h){g.setSceneTarget(jstr(e,key),w,h);}
+extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_retainSceneTargets(JNIEnv*e,jclass,jobjectArray keys){
+    std::vector<std::string> list;
+    const jsize n=keys?e->GetArrayLength(keys):0;
+    for(jsize i=0;i<n;++i){auto k=static_cast<jstring>(e->GetObjectArrayElement(keys,i));if(k){list.push_back(jstr(e,k));e->DeleteLocalRef(k);}}
+    g.retainSceneTargets(list);
+}
+extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSourceOwner(JNIEnv*e,jclass,jstring id,jstring owner){g.setSourceOwner(jstr(e,id),jstr(e,owner));}
+extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setSourceSceneRef(JNIEnv*e,jclass,jstring id,jstring key){g.setSourceSceneRef(jstr(e,id),jstr(e,key));}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_removeSourceLayer(JNIEnv*e,jclass,jstring id){g.releaseSource(jstr(e,id),e);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setTransition(JNIEnv*,jclass,jint type,jint duration){g.setTransition(type,duration);}
 extern "C" JNIEXPORT void JNICALL Java_com_stream4k60_app_engine_NativeEngine_setTransitionProgress(JNIEnv*,jclass,jfloat p){g.setTransitionProgress(p);}
