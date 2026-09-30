@@ -287,7 +287,10 @@ fun MainStudioScreen(
                     )
                     Row(Modifier.fillMaxWidth().height(m.bottomHeight)) {
                         Dock("Audio Mixer", Modifier.weight(1f).fillMaxHeight()) {
-                            AudioMixerPanel(audioItems, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.fillMaxSize(), showHeader = false, onFilters = { filteringSource = it })
+                            AudioMixerPanel(audioItems, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.fillMaxSize(), showHeader = false, onFilters = { filteringSource = it },
+                                // Desktop Audio / Mic/Aux are configured in Settings → Audio, like OBS's global devices.
+                                onProperties = { src -> if (src.id.startsWith("global:")) onOpenSettings("Audio") else editable(src.id)?.let { editingSource = it } },
+                                onRename = { src, name -> vm.renameSource(src.id, name) })
                         }
                         Dock("Scene Transitions", Modifier.width(m.transitionsWidth).fillMaxHeight()) {
                             TransitionsDockContent(selectedTransition, vm::selectTransition, studio) { active?.id?.let { vm.setActiveScene(it) } }
