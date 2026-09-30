@@ -1,5 +1,11 @@
 package com.stream4k60.app.ui.settings
 
+import com.stream4k60.app.ui.settings.components.SettingsButton
+
+import com.stream4k60.app.ui.settings.components.SettingsNumberInput
+
+import com.stream4k60.app.data.model.StreamService
+
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -47,14 +53,20 @@ fun OutputSettingsPage(viewModel: SettingsViewModel) {
 
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
         SettingsSection("Streaming") {
-            SettingsSlider(
+            val service by viewModel.streamSettings.collectAsState()
+            val recommended = recommendedBitrateKbps(service.service, config.outputResHeight, config.frameRate)
+            SettingsNumberInput(
                 label = "Video bitrate",
-                value = config.videoBitrateKbps.toFloat(),
-                onValueChange = { viewModel.setVideoBitrate(it.toInt()) },
-                valueRange = 1_000f..100_000f,
-                steps = 98,
-                unit = " Kbps",
-                description = "Target stream video rate, configurable up to 100,000 Kbps. At 4K120, begin near 80,000–100,000 Kbps only if Android, your upload link, and the ingest service support it."
+                value = config.videoBitrateKbps,
+                onValueChange = { viewModel.setVideoBitrate(it) },
+                min = 1_000, max = 100_000, step = 500, unit = "Kbps",
+                description = "How much picture data is sent each second. Higher looks sharper but needs more upload speed: keep it under about 70% of your measured upload."
+            )
+            SettingsButton(
+                "Use recommended: $recommended Kbps",
+                { viewModel.setVideoBitrate(recommended) },
+                description = "For ${StreamServices.of(service.service).label} at ${config.outputResHeight}p${config.frameRate}.",
+                enabled = config.videoBitrateKbps != recommended
             )
             SettingsDropdown(
                 label = "Video encoder",
@@ -65,7 +77,7 @@ fun OutputSettingsPage(viewModel: SettingsViewModel) {
             )
         }
 
-        SettingsSection("Detected Android hardware codecs") {
+        SettingsSection("Advanced: detected hardware codecs", initiallyExpanded = false) {
             val dimensions = "${config.outputResWidth} × ${config.outputResHeight} @ ${config.frameRate} FPS"
             Text(
                 "Current output ($dimensions): H.264 ${if (codecStatus?.h264Supported == true) "supported" else if (codecStatus == null) "checking…" else "not exposed"}; HEVC ${if (codecStatus?.hevcSupported == true) "supported" else if (codecStatus == null) "checking…" else "not exposed"}.",
@@ -87,6 +99,23 @@ fun OutputSettingsPage(viewModel: SettingsViewModel) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+/** Typical ingest limits/recommendations: Twitch caps around 6–8 Mbps, YouTube scales with resolution and frame rate. */
+internal fun recommendedBitrateKbps(service: StreamService, height: Int, fps: Int): Int {
+    val high = fps > 30
+    return when (service) {
+        StreamService.TWITCH -> if (height <= 720 && !high) 4_500 else 6_000
+        StreamService.FACEBOOK -> if (height <= 720) 4_500 else 6_000
+        StreamService.KICK -> 8_000
+        else -> when {
+            height >= 2160 -> if (high) 35_000 else 25_000
+            height >= 1440 -> if (high) 18_000 else 12_000
+            height >= 1080 -> if (high) 9_000 else 6_000
+            height >= 720 -> if (high) 6_000 else 4_000
+            else -> 2_500
         }
     }
 }

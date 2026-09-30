@@ -71,9 +71,9 @@ class StreamEngineImpl @Inject constructor(@ApplicationContext private val conte
     }
 
     override suspend fun startStreaming(config:StreamConfig){
-        require(config.service==StreamService.YOUTUBE || config.service==StreamService.CUSTOM){"This release supports YouTube and custom RTMP(S) destinations"}
-        require(config.ingestionUrl.isNotBlank()){if(config.service==StreamService.YOUTUBE)"Select a YouTube broadcast first" else "Enter a custom RTMP(S) ingest server URL"}
-        require(if(config.service==StreamService.YOUTUBE) config.protocol==StreamProtocol.RTMPS||config.protocol==StreamProtocol.HLS else config.protocol==StreamProtocol.RTMP||config.protocol==StreamProtocol.RTMPS){"Unsupported streaming protocol for this destination"}
+        require(config.ingestionUrl.isNotBlank()){"Set a server in Settings → Stream first"}
+        // Every service (YouTube, Twitch, Facebook, Kick, custom) takes RTMP(S); YouTube's API broadcasts can also use HLS.
+        require(config.protocol==StreamProtocol.RTMP||config.protocol==StreamProtocol.RTMPS||(config.service==StreamService.YOUTUBE&&config.protocol==StreamProtocol.HLS)){"Unsupported streaming protocol for this destination"}
         require(config.outputWidth in 320..3840 && config.outputHeight in 240..2160 && config.fps in 1..120){"Streaming output is limited to 3840 × 2160 at 120 FPS"}
         if(config.service==StreamService.YOUTUBE) require(config.fps<=60){"YouTube Live supports up to 60 FPS. Choose a custom RTMP(S) destination for a service that accepts 120 FPS."}
         if(_streamState.value==StreamState.LIVE)return
