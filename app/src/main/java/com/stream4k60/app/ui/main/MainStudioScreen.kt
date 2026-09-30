@@ -330,7 +330,7 @@ private fun sourceSettings(configJson:String):JSONObject {
 }
 
 @Composable private fun SourceTypePicker(onAdd:(String)->Unit,onDismiss:()->Unit){
-    val types=listOf("USB_CAPTURE" to "USB camera / capture card","BROWSER" to "Browser","MEDIA" to "Media","IMAGE" to "Image","IMAGE_SLIDESHOW" to "Image slideshow","TEXT" to "Text","COLOR" to "Color","AUDIO_INPUT" to "Audio input","AUDIO_OUTPUT" to "Audio monitor output")
+    val types=listOf("USB_CAPTURE" to "USB camera / capture card","BROWSER" to "Browser","MEDIA" to "Media","IMAGE" to "Image","IMAGE_SLIDESHOW" to "Image slideshow","TEXT" to "Text","COLOR" to "Color","AUDIO_INPUT" to "Audio input","PLAYBACK_AUDIO" to "Android app audio","AUDIO_OUTPUT" to "Audio monitor output")
     AlertDialog(onDismissRequest=onDismiss,title={Text("Add source")},text={Column{types.forEach{(id,name)->TextButton(onClick={onAdd(id)},modifier=Modifier.fillMaxWidth(),contentPadding=PaddingValues(horizontal=4.dp)){Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(name);Text("+")}}}}},confirmButton={})
 }
 

@@ -4,7 +4,16 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.input.pointer.isAltPressed
+import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -19,7 +28,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.key.Key
@@ -58,10 +66,6 @@ private data class SourceRect(
     val rotation: Float,
     val canResize: Boolean
 )
-
-private enum class ResizeCorner(val left: Boolean, val top: Boolean) {
-    TOP_LEFT(true, true), TOP_RIGHT(false, true), BOTTOM_LEFT(true, false), BOTTOM_RIGHT(false, false)
-}
 
 private data class SnapGuides(val x: Float? = null, val y: Float? = null)
 private data class SnapResult(val x: Float, val y: Float, val guides: SnapGuides)
@@ -114,8 +118,13 @@ fun EditablePreview(
     val selected = selectedBase?.let { source ->
         transientTransforms[source.id]?.let { source.copy(transformJson = it) } ?: source
     }
-    val resizeTolerance = with(density) { 11.dp.toPx() }
-    val handleSize = with(density) { 7.dp.toPx() }
+    val handleTolerance = with(density) { 16.dp.toPx() }
+    val handleSize = with(density) { 8.dp.toPx() }
+    val rotationHandleDistance = with(density) { 28.dp.toPx() }
+    var cropMode by remember { mutableStateOf(false) }
+    var freeResize by remember { mutableStateOf(false) }
+    val cropModeState = rememberUpdatedState(cropMode)
+    val freeResizeState = rememberUpdatedState(freeResize)
     val snapTolerancePx = with(density) { 8.dp.toPx() }
 
     Box(modifier = modifier) {
@@ -172,89 +181,98 @@ fun EditablePreview(
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                         focusRequester.requestFocus()
-                        val viewWidth = size.width.toFloat()
-                        val viewHeight = size.height.toFloat()
+                        val viewWidth = size.width.toFloat().coerceAtLeast(1f)
+                        val viewHeight = size.height.toFloat().coerceAtLeast(1f)
+                        val toCanvasX = canvasWidth / viewWidth
+                        val toCanvasY = canvasHeight / viewHeight
                         val currentSources = sources.map { source ->
                             transientTransforms[source.id]?.let { source.copy(transformJson = it) } ?: source
                         }
                         val selectedAtDown = selectedIdState.value?.let { id -> currentSources.firstOrNull { it.id == id } }
-                        val resizeCorner = selectedAtDown?.takeIf { it.isVisible && !it.isLocked && sourceRect(it, canvasWidth, canvasHeight).canResize }?.let {
-                            findResizeCorner(down.position, it, viewWidth, viewHeight, canvasWidth, canvasHeight, resizeTolerance)
-                        }
-                        val hit = if (resizeCorner != null) selectedAtDown else
+                            ?.takeIf { it.isVisible && !it.isLocked && it.type.uppercase() in visualSourceTypes }
+                        val selectedBox = selectedAtDown?.let { itemBox(it, canvasWidth, canvasHeight) }
+                        val onRotationHandle = selectedBox != null &&
+                            (rotationHandlePoint(selectedBox, viewWidth, viewHeight, canvasWidth, canvasHeight, rotationHandleDistance) - down.position).getDistance() <= handleTolerance
+                        val handle = if (onRotationHandle || selectedBox == null) null else
+                            findHandle(down.position, selectedBox, viewWidth, viewHeight, canvasWidth, canvasHeight, handleTolerance)
+                        val hit = if (onRotationHandle || handle != null) selectedAtDown else
                             findHitSource(down.position, viewWidth, viewHeight, canvasWidth, canvasHeight, currentSources)
                         onSelectSource(hit?.id)
                         snapGuides = SnapGuides()
-                        if (hit != null) {
-                            val initial = sourceRect(hit, canvasWidth, canvasHeight)
-                            val initialJson = runCatching { JSONObject(hit.transformJson) }.getOrDefault(JSONObject())
-                            var last = down.position
-                            var total = Offset.Zero
-                            var dragging = false
-                            var latest = hit.transformJson
-                            var change = down
-                            while (change.pressed) {
-                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                total += change.position - last
-                                last = change.position
-                                if (!dragging && total.getDistance() > viewConfiguration.touchSlop) dragging = true
-                                if (dragging && !hit.isLocked) {
+                        if (hit == null) return@awaitEachGesture
+                        val modifiers = currentEvent.keyboardModifiers
+                        val crop = cropModeState.value || modifiers.isAltPressed
+                        val freeAspect = freeResizeState.value || modifiers.isShiftPressed
+                        val initial = sourceRect(hit, canvasWidth, canvasHeight)
+                        val initialJson = runCatching { JSONObject(hit.transformJson) }.getOrDefault(JSONObject())
+                        val z = sources.indexOfFirst { it.id == hit.id }.coerceAtLeast(0)
+                        var total = Offset.Zero
+                        var last = down.position
+                        var dragging = false
+                        var latest = hit.transformJson
+                        // Two-finger pinch/twist state, captured when the second finger lands.
+                        var pinchBase: SourceItem? = null
+                        var pinchStart: Triple<Float, Float, Offset>? = null
+                        fun apply(transform: String) {
+                            latest = transform
+                            transientTransforms = transientTransforms + (hit.id to latest)
+                            applySourceTransformToNative(hit.copy(transformJson = latest), z, canvasWidth, canvasHeight)
+                        }
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+                            if (hit.isLocked) continue
+                            if (pressed.size >= 2 && handle == null && !onRotationHandle) {
+                                val a = pressed[0].position
+                                val b = pressed[1].position
+                                val distance = (a - b).getDistance().coerceAtLeast(1f)
+                                val angle = Math.toDegrees(kotlin.math.atan2((b.y - a.y).toDouble(), (b.x - a.x).toDouble())).toFloat()
+                                val centroid = (a + b) / 2f
+                                if (pinchStart == null) {
+                                    pinchBase = hit.copy(transformJson = latest)
+                                    pinchStart = Triple(distance, angle, centroid)
+                                }
+                                val (d0, a0, c0) = pinchStart!!
+                                val move = centroid - c0
+                                apply(pinchItem(pinchBase!!, distance / d0, angle - a0, move.x * toCanvasX, move.y * toCanvasY, canvasWidth, canvasHeight))
+                                dragging = true
+                                snapGuides = SnapGuides()
+                                event.changes.forEach { it.consume() }
+                                continue
+                            }
+                            if (pinchStart != null) continue // lifting one finger after a pinch should not jump into a drag
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: continue
+                            total += change.position - last
+                            last = change.position
+                            if (!dragging && total.getDistance() > viewConfiguration.touchSlop) dragging = true
+                            if (!dragging) continue
+                            val dx = total.x * toCanvasX
+                            val dy = total.y * toCanvasY
+                            when {
+                                onRotationHandle -> {
+                                    val box = selectedBox!!
+                                    val degrees = angleFromCenter(box, change.position.x * toCanvasX, change.position.y * toCanvasY)
+                                    apply(rotateItem(hit, snapRotation(degrees, fineSnap = currentEvent.keyboardModifiers.isShiftPressed), canvasWidth, canvasHeight))
+                                }
+                                handle != null && crop -> apply(cropItem(hit, handle, dx, dy, canvasWidth, canvasHeight))
+                                handle != null -> apply(resizeItem(hit, handle, dx, dy, freeAspect, canvasWidth, canvasHeight))
+                                else -> {
                                     val next = JSONObject(initialJson.toString())
-                                    if (resizeCorner != null && initial.canResize && initial.scaleX > 0f && initial.scaleY > 0f) {
-                                        val dx = total.x * canvasWidth / viewWidth.coerceAtLeast(1f)
-                                        val dy = total.y * canvasHeight / viewHeight.coerceAtLeast(1f)
-                                        val radians = Math.toRadians(initial.rotation.toDouble())
-                                        val localDx = cos(radians).toFloat() * dx + sin(radians).toFloat() * dy
-                                        val localDy = -sin(radians).toFloat() * dx + cos(radians).toFloat() * dy
-                                        val oldWidth = initial.width * initial.scaleX
-                                        val oldHeight = initial.height * initial.scaleY
-                                        val maxWidth = max(canvasWidth * 4f, 16f)
-                                        val maxHeight = max(canvasHeight * 4f, 16f)
-                                        val newWidth = (oldWidth + if (resizeCorner.left) -localDx else localDx).coerceIn(16f, maxWidth)
-                                        val newHeight = (oldHeight + if (resizeCorner.top) -localDy else localDy).coerceIn(16f, maxHeight)
-                                        val oldAnchorX = if (resizeCorner.left) oldWidth else 0f
-                                        val oldAnchorY = if (resizeCorner.top) oldHeight else 0f
-                                        val anchorRadians = radians
-                                        val oldDx = oldAnchorX - initial.pivotX
-                                        val oldDy = oldAnchorY - initial.pivotY
-                                        val anchorX = initial.positionX + cos(anchorRadians).toFloat() * oldDx - sin(anchorRadians).toFloat() * oldDy
-                                        val anchorY = initial.positionY + sin(anchorRadians).toFloat() * oldDx + cos(anchorRadians).toFloat() * oldDy
-                                        next.put("scaleX", (newWidth / initial.width.coerceAtLeast(1f)).toDouble())
-                                        next.put("scaleY", (newHeight / initial.height.coerceAtLeast(1f)).toDouble())
-                                        val resizedRect = sourceRect(hit.copy(transformJson = next.toString()), canvasWidth, canvasHeight)
-                                        val newAnchorX = if (resizeCorner.left) newWidth else 0f
-                                        val newAnchorY = if (resizeCorner.top) newHeight else 0f
-                                        val newDx = newAnchorX - resizedRect.pivotX
-                                        val newDy = newAnchorY - resizedRect.pivotY
-                                        val nextPositionX = anchorX - cos(anchorRadians).toFloat() * newDx + sin(anchorRadians).toFloat() * newDy
-                                        val nextPositionY = anchorY - sin(anchorRadians).toFloat() * newDx - cos(anchorRadians).toFloat() * newDy
-                                        next.put("x", nextPositionX.toDouble())
-                                        next.put("y", nextPositionY.toDouble())
-                                        snapGuides = SnapGuides()
-                                    } else if (resizeCorner == null) {
-                                        val proposedX = initial.x + total.x * canvasWidth / viewWidth.coerceAtLeast(1f)
-                                        val proposedY = initial.y + total.y * canvasHeight / viewHeight.coerceAtLeast(1f)
-                                        val snap = snapPosition(
-                                            hit.id, initial, proposedX, proposedY, currentSources, canvasWidth, canvasHeight,
-                                            snapTolerancePx * canvasWidth / viewWidth.coerceAtLeast(1f),
-                                            snapTolerancePx * canvasHeight / viewHeight.coerceAtLeast(1f)
-                                        )
-                                        next.put("x", (initial.positionX + snap.x - initial.x).toDouble())
-                                        next.put("y", (initial.positionY + snap.y - initial.y).toDouble())
-                                        snapGuides = snap.guides
-                                    }
-                                    latest = next.toString()
-                                    transientTransforms = transientTransforms + (hit.id to latest)
-                                    val updated = hit.copy(transformJson = latest)
-                                    val z = sources.indexOfFirst { it.id == hit.id }.coerceAtLeast(0)
-                                    applySourceTransformToNative(updated, z, canvasWidth, canvasHeight)
-                                    change.consume()
+                                    val snap = snapPosition(
+                                        hit.id, initial, initial.x + dx, initial.y + dy, currentSources, canvasWidth, canvasHeight,
+                                        snapTolerancePx * toCanvasX, snapTolerancePx * toCanvasY
+                                    )
+                                    next.put("x", (initial.positionX + snap.x - initial.x).toDouble())
+                                    next.put("y", (initial.positionY + snap.y - initial.y).toDouble())
+                                    snapGuides = snap.guides
+                                    apply(next.toString())
                                 }
                             }
-                            if (dragging && !hit.isLocked) onCommitTransform(hit.id, latest)
-                            snapGuides = SnapGuides()
+                            change.consume()
                         }
+                        if (dragging && !hit.isLocked) onCommitTransform(hit.id, latest)
+                        snapGuides = SnapGuides()
                     }
                 }
         ) {
@@ -267,76 +285,76 @@ fun EditablePreview(
                 drawLine(Color(0xFFFF4D6D), Offset(0f, py), Offset(size.width, py), strokeWidth = 1.dp.toPx())
             }
             selected?.let { source ->
-                val rect = sourceRect(source, canvasWidth, canvasHeight)
-                val rawLeft = rect.x * size.width / canvasWidth.coerceAtLeast(1)
-                val rawTop = rect.y * size.height / canvasHeight.coerceAtLeast(1)
-                val signedWidth = rect.width * rect.scaleX * size.width / canvasWidth.coerceAtLeast(1)
-                val signedHeight = rect.height * rect.scaleY * size.height / canvasHeight.coerceAtLeast(1)
-                val left = rawLeft + min(0f, signedWidth)
-                val top = rawTop + min(0f, signedHeight)
-                val width = abs(signedWidth)
-                val height = abs(signedHeight)
-                val sourceCenter = Offset(
-                    rawLeft + rect.pivotX * size.width / canvasWidth.coerceAtLeast(1),
-                    rawTop + rect.pivotY * size.height / canvasHeight.coerceAtLeast(1)
-                )
-                val stroke = 2.dp.toPx()
-                rotate(rect.rotation, sourceCenter) {
-                    drawRect(selectionColor, Offset(left, top), Size(width, height), style = Stroke(stroke))
-                    if (rect.canResize && rect.scaleX > 0f && rect.scaleY > 0f) {
-                        listOf(
-                            Offset(left, top), Offset(left + width, top),
-                            Offset(left, top + height), Offset(left + width, top + height)
-                        ).forEach { corner ->
-                            drawRect(Color.Black, Offset(corner.x - handleSize / 2f, corner.y - handleSize / 2f), Size(handleSize, handleSize))
-                            drawRect(selectionColor, Offset(corner.x - handleSize / 2f, corner.y - handleSize / 2f), Size(handleSize, handleSize), style = Stroke(stroke))
-                        }
-                    }
+                val box = itemBox(source, canvasWidth, canvasHeight)
+                fun view(fx: Float, fy: Float): Offset {
+                    val (cx, cy) = box.pointAt(fx, fy)
+                    return Offset(cx * size.width / canvasWidth.coerceAtLeast(1), cy * size.height / canvasHeight.coerceAtLeast(1))
                 }
+                val stroke = 2.dp.toPx()
+                val corners = listOf(view(0f, 0f), view(1f, 0f), view(1f, 1f), view(0f, 1f))
+                corners.forEachIndexed { i, p -> drawLine(selectionColor, p, corners[(i + 1) % 4], strokeWidth = stroke) }
+                if (!source.isLocked) {
+                    val handleColor = if (cropMode) Color(0xFFFFA726) else selectionColor
+                    BoxHandle.entries.forEach { handle ->
+                        val p = view(handle.fx, handle.fy)
+                        drawRect(Color.Black, Offset(p.x - handleSize / 2f, p.y - handleSize / 2f), Size(handleSize, handleSize))
+                        drawRect(handleColor, Offset(p.x - handleSize / 2f, p.y - handleSize / 2f), Size(handleSize, handleSize), style = Stroke(stroke))
+                    }
+                    val top = view(0.5f, 0f)
+                    val knob = rotationHandlePoint(box, size.width, size.height, canvasWidth, canvasHeight, rotationHandleDistance)
+                    drawLine(selectionColor, top, knob, strokeWidth = stroke)
+                    drawCircle(Color.Black, radius = handleSize * 0.8f, center = knob)
+                    drawCircle(selectionColor, radius = handleSize * 0.8f, center = knob, style = Stroke(stroke))
+                }
+            }
+        }
+        if (selected != null && !selected.isLocked) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.align(Alignment.TopStart).padding(6.dp)
+            ) {
+                FilterChip(
+                    selected = cropMode,
+                    onClick = { cropMode = !cropMode },
+                    label = { Text("Crop") },
+                    colors = FilterChipDefaults.filterChipColors(containerColor = Color(0xCC000000), labelColor = Color.White)
+                )
+                FilterChip(
+                    selected = freeResize,
+                    onClick = { freeResize = !freeResize },
+                    label = { Text("Free resize") },
+                    colors = FilterChipDefaults.filterChipColors(containerColor = Color(0xCC000000), labelColor = Color.White)
+                )
             }
         }
     }
 }
 
-private fun findResizeCorner(
+/** View-space point of the rotation knob, [distance] px outward from the top edge's middle. */
+private fun rotationHandlePoint(box: ItemBox, viewWidth: Float, viewHeight: Float, canvasWidth: Int, canvasHeight: Int, distance: Float): Offset {
+    val (tx, ty) = box.pointAt(0.5f, 0f)
+    val radians = Math.toRadians(box.rotation.toDouble())
+    val top = Offset(tx * viewWidth / canvasWidth.coerceAtLeast(1), ty * viewHeight / canvasHeight.coerceAtLeast(1))
+    return top + Offset((sin(radians) * distance).toFloat(), (-cos(radians) * distance).toFloat())
+}
+
+private fun findHandle(
     point: Offset,
-    source: SourceItem,
+    box: ItemBox,
     viewWidth: Float,
     viewHeight: Float,
     canvasWidth: Int,
     canvasHeight: Int,
     tolerance: Float
-): ResizeCorner? {
-    if (viewWidth <= 0f || viewHeight <= 0f) return null
-    val rect = sourceRect(source, canvasWidth, canvasHeight)
-    if (!rect.canResize || rect.scaleX <= 0f || rect.scaleY <= 0f || rect.width <= 0f || rect.height <= 0f) return null
-    val left = rect.x * viewWidth / canvasWidth.coerceAtLeast(1)
-    val top = rect.y * viewHeight / canvasHeight.coerceAtLeast(1)
-    val width = rect.width * rect.scaleX * viewWidth / canvasWidth.coerceAtLeast(1)
-    val height = rect.height * rect.scaleY * viewHeight / canvasHeight.coerceAtLeast(1)
-    val center = Offset(
-        left + rect.pivotX * viewWidth / canvasWidth.coerceAtLeast(1),
-        top + rect.pivotY * viewHeight / canvasHeight.coerceAtLeast(1)
-    )
-    val radians = Math.toRadians(rect.rotation.toDouble())
-    fun rotatePoint(x: Float, y: Float): Offset {
-        val dx = x - center.x
-        val dy = y - center.y
-        return Offset(
-            center.x + cos(radians).toFloat() * dx - sin(radians).toFloat() * dy,
-            center.y + sin(radians).toFloat() * dx + cos(radians).toFloat() * dy
-        )
+): BoxHandle? = BoxHandle.entries
+    .map { handle ->
+        val (cx, cy) = box.pointAt(handle.fx, handle.fy)
+        handle to (Offset(cx * viewWidth / canvasWidth.coerceAtLeast(1), cy * viewHeight / canvasHeight.coerceAtLeast(1)) - point).getDistance()
     }
-    val corners = listOf(
-        ResizeCorner.TOP_LEFT to rotatePoint(left, top),
-        ResizeCorner.TOP_RIGHT to rotatePoint(left + width, top),
-        ResizeCorner.BOTTOM_LEFT to rotatePoint(left, top + height),
-        ResizeCorner.BOTTOM_RIGHT to rotatePoint(left + width, top + height)
-    )
-    return corners.minByOrNull { (_, corner) -> (corner - point).getDistance() }
-        ?.takeIf { (_, corner) -> (corner - point).getDistance() <= tolerance }
-        ?.first
-}
+    .filter { it.second <= tolerance }
+    // Prefer corners when handles overlap on small items.
+    .minWithOrNull(compareBy<Pair<BoxHandle, Float>> { it.second - if (it.first.isCorner) tolerance * 0.25f else 0f })
+    ?.first
 
 private fun snapPosition(
     sourceId: String,

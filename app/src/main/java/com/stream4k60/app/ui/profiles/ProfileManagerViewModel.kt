@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.stream4k60.app.data.local.entity.ProfileEntity
 import com.stream4k60.app.data.repository.ProfileRepository
 import com.stream4k60.app.data.repository.SceneRepository
+import com.stream4k60.app.profile.ImportSelection
 import com.stream4k60.app.profile.ObsProjectImporter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -54,6 +55,9 @@ class ProfileManagerViewModel @Inject constructor(
                         scenesRepo.saveSources(imported.sources)
                         scenesRepo.saveFilters(imported.filters)
                     }
+                    // Switch to the imported canvas/output settings and first collection so positions line up.
+                    profilesRepo.activate(result.profile.id)
+                    result.collections.firstOrNull()?.let { ImportSelection.requestedCollectionId.value = it.collection.id }
                     _importReport.value = ImportReport(
                         profileName = result.profile.name,
                         collectionNames = result.collections.map { it.collection.name },

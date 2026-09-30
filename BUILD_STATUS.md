@@ -16,6 +16,9 @@ Linux/CI builds also work (2026-09-30): Android platform 35, build-tools 34.0.0,
 
 ## Implemented in source
 
+- Apply LUT (.cube/PNG) and Sharpen video filters; per-source Noise Gate audio filter with a simple "Start listening at" control and Advanced options; a Filters editor with Video/Audio tabs.
+- Canvas editing: aspect-locked corner resize, edge stretch, crop, rotation knob, two-finger pinch/twist, and resizing of OBS bounds items.
+- OBS import activates the imported profile and collection so layouts appear on the imported canvas immediately.
 - Ordered per-source GPU video filter chain: Color Correction, Chroma Key, Color Key and Luma Key, up to 8 enabled stages applied top to bottom, with add/remove/reorder/enable and live preview. OBS filters of these types import in order. Legacy single-stage `effects` configs migrate automatically.
 
 - Room-backed profiles, scene collections, scenes, sources and filters.

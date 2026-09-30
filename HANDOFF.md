@@ -19,6 +19,17 @@ The latest user direction is to optimize specifically for the Astra and use exte
 - Added JVM unit tests (`app/src/test`, `./gradlew :app:testDebugUnitTest`): 8 tests for filter-chain storage, legacy migration and native packing, all passing. The compositor GLSL passes `glslangValidator` as ES 3.20.
 - `:app:assembleDebug` succeeds on Linux (Android SDK platform 35, build-tools 34, NDK 27.0.12077973, CMake 3.22.1). Still not installed or run on the Astra.
 
+## Checkpoint 2026-09-30 (second pass)
+
+- User direction: keep OBS's features but present each with the everyday control(s) first and the rest under "Advanced" with explanations. Chroma key is not a focus.
+- Video filters added: Apply LUT (.cube / PNG LUT, `LutParser`, `LutLibrary`, native 3D textures, 2 per source) and Sharpen. Raw USB frames now honor crop/flip.
+- Audio filters: `AudioFilterChain` + native Noise Gate (`NativeAudioMixer.setInputGate`). Simple control is "Start listening at"; Advanced has close threshold, attack, hold and release. Wired through `AudioInputRoute.noiseGate` so it stays active while streaming/recording. Live preview via `NativeAudioGraph.previewGate`.
+- Filters editor: source menu "Filters…" with Video/Audio tabs, available for audio-only sources too.
+- Canvas editing rewritten on `CanvasEditMath` (unit-tested): aspect-locked corners, edge stretch, crop, rotation knob, pinch/twist, bounds-aware resizing, "Crop" and "Free resize" chips for touch.
+- OBS import: activates imported profile and switches to the imported collection (`ImportSelection`); imports LUT (with asset relink), sharpen and noise gate filters; carries desktop webcam resolution/FPS.
+- Add Source now lists Android app audio. Still missing as source types: nested Scene and Group.
+- 26 JVM unit tests pass; `assembleDebug` succeeds. Still not run on the Astra.
+
 ## Latest verification
 
 Set `ANDROID_HOME` to `C:\Users\haamh\AppData\Local\Android\Sdk` for Gradle. The latest `:app:assembleDebug` succeeded on 2026-09-29 with the source-properties, USB-decoder and import-scope changes. It proves compilation/packaging only. No app install, launch or Astra runtime check was performed. No `local.properties` was added.

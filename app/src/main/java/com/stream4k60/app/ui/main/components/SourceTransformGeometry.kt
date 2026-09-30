@@ -144,7 +144,7 @@ internal fun resolveSourceTransform(source: SourceItem, canvasWidth: Int, canvas
     )
 }
 
-private fun alignmentFactor(alignment: Int, horizontal: Boolean): Float {
+internal fun alignmentFactor(alignment: Int, horizontal: Boolean): Float {
     val start = if (horizontal) 1 else 4
     val end = if (horizontal) 2 else 8
     return when {

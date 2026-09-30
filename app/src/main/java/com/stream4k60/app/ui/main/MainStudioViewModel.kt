@@ -1,6 +1,9 @@
 package com.stream4k60.app.ui.main
 
 import com.stream4k60.app.engine.AudioFilterChain
+import com.stream4k60.app.profile.ImportSelection
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.withTimeoutOrNull
 import android.content.Context
 import android.media.AudioManager
 import androidx.lifecycle.ViewModel
@@ -45,6 +48,14 @@ enum class StudioRecordState{IDLE,RECORDING,PAUSED,STOPPING,ERROR}
  val videoConfig=settingsRepository.videoConfig.stateIn(viewModelScope,SharingStarted.Eagerly,VideoConfig())
  val importedRtmpEndpoint=settingsRepository.importedRtmpEndpoint.stateIn(viewModelScope,SharingStarted.Eagerly,null)
  init {
+  viewModelScope.launch {
+   ImportSelection.requestedCollectionId.filterNotNull().collect { id ->
+    // The collections flow can lag the import's database writes.
+    withTimeoutOrNull(5_000) { _sceneCollections.first { list -> list.any { it.id == id } } }
+    selectSceneCollection(id)
+    ImportSelection.requestedCollectionId.compareAndSet(id, null)
+   }
+  }
   viewModelScope.launch {
    if(repo.collections().first().isEmpty()) {
     val cid=UUID.randomUUID().toString()

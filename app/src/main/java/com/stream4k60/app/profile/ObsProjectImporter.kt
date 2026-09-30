@@ -10,6 +10,7 @@ import java.io.*
 import java.util.UUID
 import java.util.zip.ZipInputStream
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Imports OBS Profile exports, Scene Collection JSON, profile folders and ZIP bundles.
@@ -464,6 +465,21 @@ class ObsProjectImporter(private val context: Context) {
         if (obsId == "browser_source" || obsId == "browser_source_v2") {
             if (settings["width"] == null) settings["custom_width"]?.jsonPrimitive?.intOrNull?.let { put("width", it) }
             if (settings["height"] == null) settings["custom_height"]?.jsonPrimitive?.intOrNull?.let { put("height", it) }
+        }
+        if (obsId in setOf("dshow_input", "v4l2_input", "av_capture_input")) {
+            // Carry the OBS capture mode over to the USB camera source it is remapped to.
+            val resolution = settings["resolution"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val packed = resolution.toLongOrNull()
+            val size = when {
+                Regex("\\d+x\\d+").matches(resolution) -> resolution.split('x').let { it[0].toInt() to it[1].toInt() }
+                packed != null && packed > 0xFFFF -> (packed shr 16).toInt() to (packed and 0xFFFF).toInt() // v4l2 packs w<<16|h
+                else -> null
+            }
+            if (size != null && size.first > 0 && size.second > 0 && settings["width"] == null) {
+                put("width", size.first); put("height", size.second)
+            }
+            // dshow frame_interval is in 100 ns units.
+            settings["frame_interval"]?.jsonPrimitive?.longOrNull?.takeIf { it > 0 }?.let { put("fps", (10_000_000.0 / it).roundToInt()) }
         }
         if (obsId == "color_source") {
             settings["color"]?.let { color ->
