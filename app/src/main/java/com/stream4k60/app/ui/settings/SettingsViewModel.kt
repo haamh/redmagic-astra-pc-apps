@@ -1,5 +1,9 @@
 package com.stream4k60.app.ui.settings
 
+import com.stream4k60.app.data.model.GeneralSettings
+import com.stream4k60.app.data.model.StreamSettings
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.stream4k60.app.data.model.VideoConfig
@@ -35,21 +39,17 @@ class SettingsViewModel @Inject constructor(
     private val _language = MutableStateFlow("English")
     val language: StateFlow<String> = _language.asStateFlow()
 
-    private val _streamService = MutableStateFlow("Twitch")
-    val streamService = _streamService.asStateFlow()
-    
-    private val _streamKey = MutableStateFlow("")
-    val streamKey = _streamKey.asStateFlow()
+    val streamSettings: StateFlow<StreamSettings> = settingsRepository.streamSettings
+        .stateIn(viewModelScope, SharingStarted.Eagerly, StreamSettings())
+    val generalSettings: StateFlow<GeneralSettings> = settingsRepository.generalSettings
+        .stateIn(viewModelScope, SharingStarted.Eagerly, GeneralSettings())
 
-    private val _serverUrl = MutableStateFlow("")
-    val serverUrl = _serverUrl.asStateFlow()
+    fun saveStreamSettings(settings: StreamSettings) { viewModelScope.launch { settingsRepository.saveStreamSettings(settings) } }
+    fun saveGeneralSettings(settings: GeneralSettings) { viewModelScope.launch { settingsRepository.saveGeneralSettings(settings) } }
 
     // Add setters for all states
     fun setTheme(theme: String) { _theme.value = theme }
     fun setLanguage(language: String) { _language.value = language }
-    fun setStreamService(service: String) { _streamService.value = service }
-    fun setStreamKey(key: String) { _streamKey.value = key }
-    fun setServerUrl(url: String) { _serverUrl.value = url }
     fun setVideoBitrate(bitrateKbps: Int) {
         setVideoConfig(_videoConfig.value.copy(videoBitrateKbps = bitrateKbps.coerceIn(1_000, 100_000)))
     }

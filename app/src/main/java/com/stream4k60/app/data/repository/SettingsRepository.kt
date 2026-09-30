@@ -19,6 +19,67 @@ class SettingsRepository(private val profiles: ProfileDao) {
         .distinctUntilChanged()
         .onStart { emit(parseVideoConfig(ensureActiveProfile().configJson)) }
 
+    /** Saved destination; falls back to the service imported from OBS until the user saves one. */
+    val streamSettings: Flow<StreamSettings> = profiles.observeActive()
+        .map { profile -> profile?.let(::parseStreamSettings) ?: StreamSettings() }
+        .distinctUntilChanged()
+
+    val generalSettings: Flow<GeneralSettings> = profiles.observeActive()
+        .map { profile -> parseGeneralSettings(profile?.configJson) }
+        .distinctUntilChanged()
+
+    suspend fun saveStreamSettings(settings: StreamSettings) = updateSection("stream", buildJsonObject {
+        put("service", settings.service.name)
+        put("server", settings.server.trim())
+        put("key", settings.streamKey.trim())
+    })
+
+    suspend fun saveGeneralSettings(settings: GeneralSettings) = updateSection("general", buildJsonObject {
+        put("confirmStopStreaming", settings.confirmStopStreaming)
+        put("confirmStopRecording", settings.confirmStopRecording)
+        put("autoRecordWhenStreaming", settings.autoRecordWhenStreaming)
+        put("snappingEnabled", settings.snappingEnabled)
+        put("snapToSources", settings.snapToSources)
+    })
+
+    private suspend fun updateSection(key: String, value: JsonObject) {
+        val profile = ensureActiveProfile()
+        val root = runCatching { Json.parseToJsonElement(profile.configJson) as? JsonObject }.getOrNull() ?: JsonObject(emptyMap())
+        profiles.updateConfigJson(profile.id, JsonObject(root + (key to value)).toString())
+    }
+
+    private fun parseStreamSettings(profile: ProfileEntity): StreamSettings {
+        val root = runCatching { Json.parseToJsonElement(profile.configJson) as? JsonObject }.getOrNull()
+        val stream = root?.get("stream") as? JsonObject
+        if (stream != null) {
+            fun text(k: String) = stream[k]?.jsonPrimitive?.contentOrNull.orEmpty()
+            return StreamSettings(
+                StreamService.entries.firstOrNull { it.name == text("service") } ?: StreamService.CUSTOM,
+                text("server"), text("key")
+            )
+        }
+        val imported = parseImportedRtmpEndpoint(profile) ?: return StreamSettings()
+        val service = when {
+            imported.serverUrl.contains("youtube", true) -> StreamService.YOUTUBE
+            imported.serverUrl.contains("twitch", true) -> StreamService.TWITCH
+            imported.serverUrl.contains("facebook", true) -> StreamService.FACEBOOK
+            else -> StreamService.CUSTOM
+        }
+        return StreamSettings(service, imported.serverUrl, imported.streamKey)
+    }
+
+    private fun parseGeneralSettings(configJson: String?): GeneralSettings {
+        val general = (runCatching { Json.parseToJsonElement(configJson ?: "{}") as? JsonObject }.getOrNull()?.get("general") as? JsonObject)
+            ?: return GeneralSettings()
+        fun bool(k: String, d: Boolean) = general[k]?.jsonPrimitive?.booleanOrNull ?: d
+        val defaults = GeneralSettings()
+        return GeneralSettings(
+            bool("confirmStopStreaming", defaults.confirmStopStreaming), bool("confirmStopRecording", defaults.confirmStopRecording),
+            bool("autoRecordWhenStreaming", defaults.autoRecordWhenStreaming), bool("snappingEnabled", defaults.snappingEnabled),
+            bool("snapToSources", defaults.snapToSources)
+        )
+    }
+
     private fun parseImportedRtmpEndpoint(profile: ProfileEntity): ImportedRtmpEndpoint? = runCatching {
         val root = Json.parseToJsonElement(profile.obsServiceJson) as? JsonObject ?: return null
         val settings = root["settings"] as? JsonObject ?: root

@@ -163,7 +163,7 @@ fun MainStudioScreen(
         openCustomStream = { customRtmp = true },
         openProfiles = onOpenProfiles,
         openSettings = onOpenSettings,
-        addSource = { vm.addSource(it) },
+        addSource = { type -> vm.addSource(type) { created -> selectedSourceId = created.id; editingSource = created } },
         startReplay = vm::startReplay,
         toggleStudio = vm::toggleStudioMode
     )
@@ -304,7 +304,8 @@ fun MainStudioScreen(
     streamError?.let { message ->
         AlertDialog(onDismissRequest = vm::dismissStreamError, title = { Text("Streaming could not start") }, text = { Text(message) }, confirmButton = { TextButton(onClick = vm::dismissStreamError) { Text("OK") } })
     }
-    if(addSource)SourceTypePicker(onAdd={type->addSource=false;if(type=="SCENE")pickingNestedScene=true else vm.addSource(type)},onDismiss={addSource=false})
+    // New sources open their properties straight away so the device/file/URL can be chosen, like OBS.
+    if(addSource)SourceTypePicker(onAdd={type->addSource=false;if(type=="SCENE")pickingNestedScene=true else vm.addSource(type){created->selectedSourceId=created.id;editingSource=created}},onDismiss={addSource=false})
     if(pickingNestedScene)NestedScenePicker(vm,onDismiss={pickingNestedScene=false})
     filteringSource?.let { source ->
         FilterEditorScreen(

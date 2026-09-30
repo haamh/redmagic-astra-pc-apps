@@ -108,9 +108,12 @@ fun EditablePreview(
     onCommitTransform: (String, String) -> Unit,
     onMoveSource: (String, Int) -> Unit,
     focusRequester: FocusRequester,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    snapping: Boolean = true,
+    snapToSources: Boolean = true
 ) {
     val density = LocalDensity.current
+    val snappingState = rememberUpdatedState(snapping to snapToSources)
     // Re-layout when a source's runtime size becomes known (auto-sized text, media video size).
     val nativeSizes by com.stream4k60.app.engine.SourceNativeSizes.sizes.collectAsState()
     val selectionColor = Color(0xFF53C7FF)
@@ -262,8 +265,9 @@ fun EditablePreview(
                                 handle != null -> apply(resizeItem(hit, handle, dx, dy, freeAspect, canvasWidth, canvasHeight))
                                 else -> {
                                     val next = JSONObject(initialJson.toString())
-                                    val snap = snapPosition(
-                                        hit.id, initial, initial.x + dx, initial.y + dy, currentSources, canvasWidth, canvasHeight,
+                                    val (snapOn, toSources) = snappingState.value
+                                    val snap = if (!snapOn) SnapResult(initial.x + dx, initial.y + dy, SnapGuides()) else snapPosition(
+                                        hit.id, initial, initial.x + dx, initial.y + dy, if (toSources) currentSources else emptyList(), canvasWidth, canvasHeight,
                                         snapTolerancePx * toCanvasX, snapTolerancePx * toCanvasY
                                     )
                                     next.put("x", (initial.positionX + snap.x - initial.x).toDouble())

@@ -215,10 +215,12 @@ enum class StudioRecordState{IDLE,RECORDING,PAUSED,STOPPING,ERROR}
 private suspend fun activateScene(collectionId:String,id:String){repo.loadScenes(collectionId).forEach{repo.saveScene(it.copy(active=it.id==id))};repo.saveCollection(repo.collections().first().firstOrNull{it.id==collectionId}?.copy(activeSceneId=id)?:return);load()}
 private fun transitionDurationMs():Int=when(_transition.value){"Fast Fade"->180;"Slow Fade"->600;else->300}
 private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
- fun addSource(type:String){viewModelScope.launch{val s=_activeScene.value?:return@launch;val rows=repo.loadSources(s.id);val id=UUID.randomUUID().toString()
+ /** Adds a source; [onCreated] receives it so the studio can open its properties, like OBS. */
+ fun addSource(type:String,onCreated:(SourceItem)->Unit={}){viewModelScope.launch{val s=_activeScene.value?:return@launch;val rows=repo.loadSources(s.id);val id=UUID.randomUUID().toString()
   // A new group's canvas matches the program canvas, so items moved into it keep their positions.
   val config=if(type.equals("GROUP",true))settingsRepository.videoConfig.first().let{"{\"width\":${it.baseResWidth},\"height\":${it.baseResHeight}}"}else defaultConfigFor(type)
-  repo.saveSources(listOf(SourceEntity(id,s.id,displayNameFor(type,rows.size),type,rows.size,true,false,config,"{}","{}")));load()}}
+  repo.saveSources(listOf(SourceEntity(id,s.id,displayNameFor(type,rows.size),type,rows.size,true,false,config,"{}","{}")));load()
+  _sources.value.firstOrNull{it.id==id}?.let(onCreated)}}
  fun removeSource(id:String?=null){viewModelScope.launch{val s=_activeScene.value?:return@launch;val target=id?.let{rowFor(it)}?:repo.loadSources(s.id).lastOrNull();target?.let{deleteDeep(it)};load()}}
  fun renameSource(id:String,name:String){viewModelScope.launch{val clean=name.trim().take(80);if(clean.isEmpty())return@launch;rowFor(id)?.let{repo.saveSources(listOf(it.copy(name=clean)))};load()}}
  fun duplicateSource(id:String){viewModelScope.launch{
@@ -387,10 +389,31 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
   j.put("muted",!pressed)
   updateSourceConfig(src.id,j.toString())
  }
+ val generalSettings=settingsRepository.generalSettings.stateIn(viewModelScope,SharingStarted.Eagerly,GeneralSettings())
+ /** Destination saved in Settings → Stream, with the current Output/Video settings. */
+ private suspend fun savedDestination():StreamConfig?{
+  val s=settingsRepository.streamSettings.first()
+  if(s.server.isBlank()||s.streamKey.isBlank())return null
+  val v=settingsRepository.videoConfig.first()
+  return StreamConfig(
+   service=s.service,
+   protocol=if(s.server.startsWith("rtmps",true))StreamProtocol.RTMPS else StreamProtocol.RTMP,
+   ingestionUrl=s.server,streamName=s.streamKey,
+   outputCodec=v.outputCodec,outputWidth=v.outputResWidth,outputHeight=v.outputResHeight,
+   // YouTube ingest accepts at most 60 FPS.
+   fps=if(s.service==StreamService.YOUTUBE)v.frameRate.coerceAtMost(60)else v.frameRate,
+   bitrate=v.videoBitrateKbps*1_000
+  )
+ }
  fun startStreaming()=viewModelScope.launch{
   val routes=audioRoutes(); val monitor=monitorDeviceId(); val playback=renderedItems().any{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}
   _streamError.value=null
-  runCatching{engine.startStreaming(_streamConfig.value.copy(audioDeviceIds=routes.map{it.deviceId},audioInputs=routes,monitorDeviceId=monitor,monitorEnabled=monitor!=null,audioPlaybackCaptureEnabled=playback))}.onFailure{_streamError.value=it.message ?: "Streaming could not start."}
+  // A destination picked this session (YouTube picker / custom dialog) wins; otherwise use Settings → Stream.
+  val destination=_streamConfig.value.takeIf{it.ingestionUrl.isNotBlank()}?:savedDestination()
+  if(destination==null){_streamError.value="No stream destination yet. Open Settings → Stream, choose a service and paste your stream key.";return@launch}
+  runCatching{engine.startStreaming(destination.copy(audioDeviceIds=routes.map{it.deviceId},audioInputs=routes,monitorDeviceId=monitor,monitorEnabled=monitor!=null,audioPlaybackCaptureEnabled=playback))}
+   .onSuccess{if(generalSettings.value.autoRecordWhenStreaming&&engine.recordState.value==RecordState.IDLE)startRecording()}
+   .onFailure{_streamError.value=it.message ?: "Streaming could not start."}
  }
  fun stopStreaming()=viewModelScope.launch{engine.stopStreaming()}
  fun startRecording()=viewModelScope.launch{

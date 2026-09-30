@@ -25,4 +25,20 @@ enum class OutputCodec { H264, HEVC, AV1 }
 enum class StreamService { CUSTOM, TWITCH, YOUTUBE, FACEBOOK, KICK, TIKTOK, INSTAGRAM }
 enum class StreamProtocol { RTMP, RTMPS, HLS, SRT, RIST }
 
+/** Stream destination saved in the active profile (Settings → Stream), like OBS's service.json. */
+data class StreamSettings(
+    val service: StreamService = StreamService.YOUTUBE,
+    val server: String = "",
+    val streamKey: String = ""
+)
+
+/** Studio behaviour toggles (Settings → General). */
+data class GeneralSettings(
+    val confirmStopStreaming: Boolean = true,
+    val confirmStopRecording: Boolean = true,
+    val autoRecordWhenStreaming: Boolean = false,
+    val snappingEnabled: Boolean = true,
+    val snapToSources: Boolean = true
+)
+
 data class ImportedRtmpEndpoint(val serverUrl: String, val streamKey: String, val protocol: StreamProtocol)
