@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.filters
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -126,7 +128,7 @@ fun FilterEditorScreen(
 
     AlertDialog(
         onDismissRequest = cancel,
-        title = { Text("Filters · ${source.name}") },
+        title = { ClosableTitle("Filters · ${source.name}", cancel) },
         text = {
             Column(Modifier.heightIn(max = 600.dp)) {
                 if (supportsVideo && supportsAudio) {

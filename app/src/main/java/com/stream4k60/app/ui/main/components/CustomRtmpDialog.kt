@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.main.components
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -55,7 +57,7 @@ fun CustomRtmpDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Custom RTMP destination") },
+        title = { ClosableTitle("Custom RTMP destination", onDismiss) },
         text = {
             Column(
                 modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),

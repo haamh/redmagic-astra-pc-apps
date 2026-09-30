@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.sources
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import android.content.Context
 import android.graphics.Color
 import android.net.Uri
@@ -157,7 +159,7 @@ fun SourcePropertiesDialog(
     val title = "${source.name} properties"
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
+        title = { ClosableTitle(title, onDismiss) },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
                 Text(sourceTypeDescription(type), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

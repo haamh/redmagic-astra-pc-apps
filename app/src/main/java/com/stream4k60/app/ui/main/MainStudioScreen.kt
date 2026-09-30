@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.main
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import androidx.compose.runtime.saveable.rememberSaveable
 
 import com.stream4k60.app.data.model.HotkeyAction
@@ -357,7 +359,7 @@ fun MainStudioScreen(
             projectionRequested = false
             projectionDeniedForSources = true
         },
-        title = { Text("Choose what Stream4k can capture") },
+        title = { ClosableTitle("Choose what Stream4k can capture", { showProjectionGuideDialog = false; projectionRequested = false; projectionDeniedForSources = true }) },
         text = {
             Text(
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -383,7 +385,7 @@ fun MainStudioScreen(
     )
     if(showProjectionRetryDialog) AlertDialog(
         onDismissRequest = { showProjectionRetryDialog = false },
-        title = { Text("Capture permission needed") },
+        title = { ClosableTitle("Capture permission needed", { showProjectionRetryDialog = false }) },
         text = { Text("Android did not grant screen or playback capture. These sources stay visible in the scene list, but they cannot capture until permission is granted.") },
         confirmButton = { Button(onClick = { requestProjectionPermission() }) { Text("Try again") } },
         dismissButton = { TextButton(onClick = { showProjectionRetryDialog = false }) { Text("Later") } }
@@ -391,7 +393,7 @@ fun MainStudioScreen(
     if(yt)YouTubeBroadcastPicker({cfg,title->vm.setStreamConfig(cfg);broadcastTitle=title;yt=false},{yt=false})
     if(customRtmp)CustomRtmpDialog(videoConfig,importedRtmpEndpoint,{vm.setStreamConfig(it);customRtmp=false},{customRtmp=false})
     streamError?.let { message ->
-        AlertDialog(onDismissRequest = vm::dismissStreamError, title = { Text("Streaming could not start") }, text = { Text(message) }, confirmButton = { TextButton(onClick = vm::dismissStreamError) { Text("OK") } })
+        AlertDialog(onDismissRequest = vm::dismissStreamError, title = { ClosableTitle("Streaming could not start", vm::dismissStreamError) }, text = { Text(message) }, confirmButton = { TextButton(onClick = vm::dismissStreamError) { Text("OK") } })
     }
     // New sources open their properties straight away so the device/file/URL can be chosen, like OBS.
     if(addSource)SourceTypePicker(onAdd={type->addSource=false;if(type=="SCENE")pickingNestedScene=true else vm.addSource(type){created->selectedSourceId=created.id;editingSource=created}},onDismiss={addSource=false})
@@ -451,7 +453,7 @@ private fun sourceSettings(configJson:String):JSONObject {
 
 @Composable private fun SourceTypePicker(onAdd:(String)->Unit,onDismiss:()->Unit){
     val types=listOf("USB_CAPTURE" to "USB camera / capture card","BROWSER" to "Browser","MEDIA" to "Media","IMAGE" to "Image","IMAGE_SLIDESHOW" to "Image slideshow","TEXT" to "Text","COLOR" to "Color","AUDIO_INPUT" to "Audio input","PLAYBACK_AUDIO" to "Android app audio","AUDIO_OUTPUT" to "Audio monitor output","SCENE" to "Scene (show another scene)","GROUP" to "Group")
-    AlertDialog(onDismissRequest=onDismiss,title={Text("Add source")},text={Column{types.forEach{(id,name)->TextButton(onClick={onAdd(id)},modifier=Modifier.fillMaxWidth(),contentPadding=PaddingValues(horizontal=4.dp)){Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(name);Text("+")}}}}},confirmButton={})
+    AlertDialog(onDismissRequest=onDismiss,title={ClosableTitle("Add source",onDismiss)},text={Column{types.forEach{(id,name)->TextButton(onClick={onAdd(id)},modifier=Modifier.fillMaxWidth(),contentPadding=PaddingValues(horizontal=4.dp)){Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(name);Text("+")}}}}},confirmButton={})
 }
 
 /** Chooses a scene to show inside the active one; scenes that would create a loop are not offered. */
@@ -460,7 +462,7 @@ private fun sourceSettings(configJson:String):JSONObject {
     LaunchedEffect(Unit) { choices = vm.nestableScenes() }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add scene") },
+        title = { ClosableTitle("Add scene", onDismiss) },
         text = {
             Column {
                 when {

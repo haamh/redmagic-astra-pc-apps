@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.youtube
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -34,7 +36,7 @@ fun YouTubeBroadcastPicker(onSelected: (StreamConfig, String) -> Unit, onDismiss
     LaunchedEffect(Unit) { vm.restoreAndLoad(ctx) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Manage Broadcast") },
+        title = { ClosableTitle("Manage Broadcast", onDismiss) },
         text = {
             Column {
                 if (!connected) {

@@ -1,5 +1,8 @@
 package com.stream4k60.app.ui.main.components
 
+import com.stream4k60.app.ui.common.ClosableTitle
+import com.stream4k60.app.ui.common.CloseButton
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -22,7 +25,7 @@ fun AddSourceDialog(
             color = MaterialTheme.colorScheme.surface
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Add Source", style = MaterialTheme.typography.titleLarge)
+                ClosableTitle("Add Source", onDismiss)
                 Spacer(modifier = Modifier.height(16.dp))
                 
                 Column {

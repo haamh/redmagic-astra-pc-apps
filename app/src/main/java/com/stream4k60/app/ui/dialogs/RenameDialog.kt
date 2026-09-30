@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.dialogs
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,7 +22,7 @@ fun RenameDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(title, style = MaterialTheme.typography.titleLarge)
+                ClosableTitle(title, onDismiss)
                 Spacer(modifier = Modifier.height(16.dp))
                 OutlinedTextField(
                     value = text,

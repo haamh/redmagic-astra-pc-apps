@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.search
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -36,7 +38,7 @@ fun FeatureSearchSheet(entries:List<FeatureEntry>,onDismiss:()->Unit){
             if(score==0)null else score to e
         }.sortedByDescending{it.first}.map{it.second}
     }
-    AlertDialog(onDismissRequest=onDismiss,title={Text("Search everything")},text={Column{
+    AlertDialog(onDismissRequest=onDismiss,title={ClosableTitle("Search everything",onDismiss)},text={Column{
         OutlinedTextField(q,{q=it},modifier=Modifier.fillMaxWidth().showImeOnFocus(),singleLine=true,placeholder={Text("Try: 4K120, HEVC, YouTube, audio, USB, HDR…")})
         Spacer(Modifier.height(8.dp))
         LazyColumn(Modifier.heightIn(max=520.dp)){

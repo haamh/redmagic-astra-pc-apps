@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.profiles
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -17,7 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 
 @Composable
-fun ProfileManagerScreen(vm: ProfileManagerViewModel = hiltViewModel()) {
+fun ProfileManagerScreen(onClose: () -> Unit = {}, vm: ProfileManagerViewModel = hiltViewModel()) {
     val ctx = LocalContext.current
     val profiles by vm.profiles.collectAsState()
     val report by vm.importReport.collectAsState()
@@ -31,7 +33,7 @@ fun ProfileManagerScreen(vm: ProfileManagerViewModel = hiltViewModel()) {
         uri?.let { vm.import(it) { android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_LONG).show() } }
     }
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Profiles & OBS imports", style = MaterialTheme.typography.headlineSmall)
+        ClosableTitle("Profiles & OBS imports", onClose, style = MaterialTheme.typography.headlineSmall)
         Text("Import OBS profile settings, scene collections, source layouts, filters and bundled media when present. Select Use to apply a profile; switch imported collections from the Studio Collection menu.", style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -57,7 +59,7 @@ fun ProfileManagerScreen(vm: ProfileManagerViewModel = hiltViewModel()) {
     report?.let { imported ->
         AlertDialog(
             onDismissRequest = vm::dismissImportReport,
-            title = { Text("OBS import report") },
+            title = { ClosableTitle("OBS import report", vm::dismissImportReport) },
             text = {
                 Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
                     Text("Profile: ${imported.profileName}")

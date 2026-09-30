@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.main.components
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import android.content.Context
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -131,7 +133,7 @@ fun AudioMixerPanel(
         var name by remember(src.id) { mutableStateOf(src.name) }
         AlertDialog(
             onDismissRequest = { renaming = null },
-            title = { Text("Rename") },
+            title = { ClosableTitle("Rename", { renaming = null }) },
             text = { OutlinedTextField(name, { name = it }, singleLine = true) },
             confirmButton = { TextButton(onClick = { onRename?.invoke(src, name); renaming = null }) { Text("OK") } },
             dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } }

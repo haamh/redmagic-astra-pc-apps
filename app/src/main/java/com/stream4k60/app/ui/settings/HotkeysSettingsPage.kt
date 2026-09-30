@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.settings
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import android.view.KeyEvent
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -94,7 +96,7 @@ private fun KeyCaptureDialog(
     val conflict = pending?.let { p -> bindings.entries.firstOrNull { it.value == p && it.key != action }?.key }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(action.label) },
+        title = { ClosableTitle(action.label, onDismiss) },
         text = {
             Column(
                 Modifier.fillMaxWidth().focusRequester(focus).focusable().onPreviewKeyEvent { e ->

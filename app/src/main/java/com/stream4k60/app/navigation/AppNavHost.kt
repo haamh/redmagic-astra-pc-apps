@@ -19,7 +19,7 @@ fun AppNavHost(){
         composable(NavRoutes.SettingsCategory.route, arguments=listOf(navArgument("category"){type=NavType.StringType})){entry->
             SettingsScreen(onNavigateBack={nav.popBackStack()},initialCategory=entry.arguments?.getString("category") ?: "General")
         }
-        composable(NavRoutes.ProfileManager.route){ProfileManagerScreen()}
+        composable(NavRoutes.ProfileManager.route){ProfileManagerScreen(onClose={nav.popBackStack()})}
         composable(NavRoutes.SettingsGeneral.route){SettingsScreen(onNavigateBack={nav.popBackStack()},initialCategory="General")}
         composable(NavRoutes.SettingsStream.route){SettingsScreen(onNavigateBack={nav.popBackStack()},initialCategory="Stream")}
         composable(NavRoutes.SettingsOutput.route){SettingsScreen(onNavigateBack={nav.popBackStack()},initialCategory="Output")}

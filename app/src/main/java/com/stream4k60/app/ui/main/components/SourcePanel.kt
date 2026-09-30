@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.main.components
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -317,7 +319,7 @@ fun SourcePanel(
     renameTarget?.let { source ->
         AlertDialog(
             onDismissRequest = { renameTarget = null },
-            title = { Text("Rename source") },
+            title = { ClosableTitle("Rename source", { renameTarget = null }) },
             text = {
                 OutlinedTextField(
                     value = renameValue,

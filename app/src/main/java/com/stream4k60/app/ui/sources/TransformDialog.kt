@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.sources
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -114,7 +116,7 @@ fun TransformDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Transform · ${source.name}") },
+        title = { ClosableTitle("Transform · ${source.name}", onDismiss) },
         text = {
             Column(
                 Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),

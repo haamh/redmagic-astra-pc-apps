@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.dialogs
 
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -34,7 +36,7 @@ fun ColorPickerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Color source") },
+        title = { ClosableTitle("Color source", onDismiss) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(

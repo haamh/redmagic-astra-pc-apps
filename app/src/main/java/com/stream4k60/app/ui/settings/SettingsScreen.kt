@@ -1,5 +1,9 @@
 package com.stream4k60.app.ui.settings
 
+import com.stream4k60.app.ui.common.CloseButton
+
+import com.stream4k60.app.ui.common.ClosableTitle
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -82,6 +86,7 @@ fun SettingsScreen(
                     Button(onClick = onNavigateBack, modifier = Modifier.padding(end = 8.dp)) {
                         Text("Done")
                     }
+                    CloseButton(onNavigateBack)
                 }
             )
         }
@@ -203,7 +208,7 @@ fun SettingsScreen(
         }
         AlertDialog(
             onDismissRequest = { showResetConfirmation = false },
-            title = { Text("Reset $selectedCategory settings?") },
+            title = { ClosableTitle("Reset $selectedCategory settings?", { showResetConfirmation = false }) },
             text = { Text(resetDescription) },
             confirmButton = {
                 TextButton(onClick = {
