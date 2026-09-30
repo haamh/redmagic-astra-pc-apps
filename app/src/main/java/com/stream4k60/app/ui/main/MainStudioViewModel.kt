@@ -1,5 +1,6 @@
 package com.stream4k60.app.ui.main
 
+import com.stream4k60.app.engine.HotkeyDispatcher
 import com.stream4k60.app.engine.AudioFilterChain
 import com.stream4k60.app.profile.ImportSelection
 import kotlinx.coroutines.flow.filterNotNull
@@ -53,6 +54,13 @@ enum class StudioRecordState{IDLE,RECORDING,PAUSED,STOPPING,ERROR}
 
 @HiltViewModel class MainStudioViewModel @Inject constructor(private val repo:SceneRepository,private val engine:StreamEngine,private val settingsRepository:SettingsRepository,@ApplicationContext private val context:Context):ViewModel(){
  private val sourceTransformMutex=Mutex()
+ private val audioSettingsState=settingsRepository.audioSettings.stateIn(viewModelScope,SharingStarted.Eagerly,AudioSettings())
+ val advancedSettings=settingsRepository.advancedSettings.stateIn(viewModelScope,SharingStarted.Eagerly,AdvancedSettings())
+ @Volatile private var pushToTalkHeld=false
+ private val _audioItems=MutableStateFlow<List<SourceItem>>(emptyList())
+ /** Everything with audio the program uses: scene sources, nested content and the global Desktop/Mic sources. */
+ val audioItems=_audioItems.asStateFlow()
+
  private val _renderSources=MutableStateFlow<List<RenderSource>>(emptyList());val renderSources=_renderSources.asStateFlow()
  /** Items inside each group of the active scene (keyed by group source id), bottom layer first. */
  private val _groupChildren=MutableStateFlow<Map<String,List<SourceItem>>>(emptyMap());val groupChildren=_groupChildren.asStateFlow()
@@ -67,6 +75,9 @@ enum class StudioRecordState{IDLE,RECORDING,PAUSED,STOPPING,ERROR}
  val videoConfig=settingsRepository.videoConfig.stateIn(viewModelScope,SharingStarted.Eagerly,VideoConfig())
  val importedRtmpEndpoint=settingsRepository.importedRtmpEndpoint.stateIn(viewModelScope,SharingStarted.Eagerly,null)
  init {
+  // Global audio devices/levels and push-to-talk changes re-sync the native mixer.
+  viewModelScope.launch { audioSettingsState.drop(1).collect { syncAudioGraph() } }
+  viewModelScope.launch { settingsRepository.hotkeys.collect { HotkeyDispatcher.setBindings(it ?: HotkeyDispatcher.defaultBindings) } }
   viewModelScope.launch {
    ImportSelection.requestedCollectionId.filterNotNull().collect { id ->
     // The collections flow can lag the import's database writes.
@@ -278,8 +289,23 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
   "CAMERA"->"Camera ${n+1}";"USB_CAPTURE"->"USB Capture ${n+1}";"SCREEN_CAPTURE"->"Screen Capture";"BROWSER"->"Browser ${n+1}";"IMAGE"->"Image ${n+1}";"IMAGE_SLIDESHOW"->"Image Slideshow ${n+1}";"MEDIA"->"Media ${n+1}";"TEXT"->"Text ${n+1}";"COLOR"->"Color ${n+1}";"AUDIO_INPUT"->"Audio Input ${n+1}";"AUDIO_OUTPUT"->"Monitor Output ${n+1}";"PLAYBACK_AUDIO"->"Android Playback Audio";else->"$type ${n+1}"
  }
  /** Every source the program actually shows, including the contents of nested scenes and groups. */
- private fun renderedItems():List<SourceItem> = _renderSources.value.map{it.item}
+ private fun renderedItems():List<SourceItem> = _renderSources.value.map{it.item}+globalAudioItems()
+ /** OBS global audio (Settings → Audio): present in every scene, shown in the mixer, filterable. */
+ private fun globalAudioItems():List<SourceItem>{
+  val a=audioSettingsState.value
+  return buildList{
+   if(a.desktopAudioEnabled)add(SourceItem(GlobalAudio.DESKTOP,"Desktop Audio","PLAYBACK_AUDIO",true,false,a.desktopConfig))
+   if(a.micDeviceId!=AudioSettings.MIC_DISABLED){
+    val cfg=runCatching{org.json.JSONObject(a.micConfig)}.getOrDefault(org.json.JSONObject()).put("deviceId",if(a.micDeviceId==AudioSettings.MIC_DEFAULT)-1 else a.micDeviceId)
+    // Push-to-talk keeps the mic muted until the key is held; push-to-mute mutes while held.
+    if(a.pushToTalk&&!pushToTalkHeld||a.pushToMute&&pushToTalkHeld)cfg.put("muted",true)
+    add(SourceItem(GlobalAudio.MIC,"Mic/Aux","AUDIO_INPUT",true,false,cfg.toString()))
+   }
+  }
+ }
+ private fun refreshAudioItems(){_audioItems.value=renderedItems()}
  private fun syncAudioGraph() {
+  refreshAudioItems()
   val routes=audioRoutes()
   val playbackSource=renderedItems().firstOrNull{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}
   val playbackRoute=playbackSource?.let(::parsePlaybackRoute)
@@ -307,7 +333,17 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
      }
   }
  }
- fun updateSourceConfig(id:String,config:String){viewModelScope.launch{rowFor(id)?.let{row->
+ fun updateSourceConfig(id:String,config:String){
+  if(id==GlobalAudio.DESKTOP||id==GlobalAudio.MIC){
+   viewModelScope.launch{
+    val a=audioSettingsState.value
+    // The device and push-to-talk mute are derived, not stored.
+    val clean=runCatching{org.json.JSONObject(config).apply{remove("deviceId");if(id==GlobalAudio.MIC&&(a.pushToTalk||a.pushToMute))remove("muted")}}.getOrNull()?.toString()?:config
+    settingsRepository.saveAudioSettings(if(id==GlobalAudio.DESKTOP)a.copy(desktopConfig=clean)else a.copy(micConfig=clean))
+   }
+   return
+  }
+  viewModelScope.launch{rowFor(id)?.let{row->
   repo.saveSources(listOf(row.copy(configJson=config)))
   if(row.type.equals("AUDIO_INPUT",true)) runCatching { engine.updateAudioRoute(parseAudioRoute(SourceItem(row.id,row.name,row.type,row.visible,row.locked,config,row.transformJson))) }
    .onSuccess { SourceRuntimeErrors.clear(id) }
@@ -360,7 +396,9 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
  private fun audioRoutes(): List<AudioInputRoute> = renderedItems().filter { (it.type.equals("AUDIO_INPUT", true) || it.type.equals("USB_CAPTURE", true)) && it.isVisible }.mapNotNull { src ->
   runCatching {
    val isCaptureCard=src.type.equals("USB_CAPTURE",true)
-   val j=sourceAudioSettings(src.configJson); val id=j.optInt(if(isCaptureCard)"audioDeviceId" else "deviceId",-1); if(id<0) null else AudioInputRoute(
+   val j=sourceAudioSettings(src.configJson); val id=j.optInt(if(isCaptureCard)"audioDeviceId" else "deviceId",-1)
+   // -1 opens Android's default input; only the global Mic/Aux asks for that.
+   if(id<0&&src.id!=GlobalAudio.MIC) null else AudioInputRoute(
     sourceId=if(isCaptureCard)"usb_audio_${src.id}" else src.id, deviceId=id, volume=j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f), balance=j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f), muted=j.optBoolean("muted",false),
     monitoring=runCatching{AudioMonitoring.valueOf(j.optString("monitoring","MONITOR_AND_OUTPUT"))}.getOrDefault(AudioMonitoring.MONITOR_AND_OUTPUT),
     syncOffsetMs=j.optInt("syncOffsetMs",0).coerceIn(-2000,2000), solo=j.optBoolean("solo",false),
@@ -374,16 +412,24 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
    AudioInputRoute(audioId,-1,j.optDouble("volume",1.0).toFloat().coerceIn(0f,2f),j.optDouble("balance",0.0).toFloat().coerceIn(-1f,1f),j.optBoolean("muted",!j.optBoolean("audioEnabled",true)),runCatching{AudioMonitoring.valueOf(j.optString("monitoring","OUTPUT_ONLY"))}.getOrDefault(AudioMonitoring.OUTPUT_ONLY),j.optInt("syncOffsetMs",0).coerceIn(-2000,2000),j.optBoolean("solo",false),AudioFilterChain.noiseGate(src.configJson))
   }.getOrNull()
  }
+ /** An Audio Output source wins; otherwise the monitoring device from Settings → Audio (-1 = Android default). */
  private fun monitorDeviceId(): Int? = renderedItems().firstOrNull { it.type.equals("AUDIO_OUTPUT",true) && it.isVisible }?.let { runCatching { sourceSettings(it.configJson).optInt("deviceId",-1).takeIf { id -> id>=0 } }.getOrNull() }
+  ?: audioSettingsState.value.monitorDeviceId
  fun audioPeak(sourceId:String):Float = engine.audioPeak(sourceId)
  fun togglePrimaryMicMute(){
-  val src=_sources.value.firstOrNull{it.type.equals("AUDIO_INPUT",true)} ?: return
+  val src=renderedItems().firstOrNull{it.id==GlobalAudio.MIC} ?: _sources.value.firstOrNull{it.type.equals("AUDIO_INPUT",true)} ?: return
   val root=runCatching{org.json.JSONObject(src.configJson)}.getOrDefault(org.json.JSONObject());val j=root.optJSONObject("settings")?:root
   val next=!j.optBoolean("muted",false)
   j.put("muted",next)
   updateSourceConfig(src.id,j.toString())
  }
  fun setPushToTalk(pressed:Boolean){
+  val a=audioSettingsState.value
+  if(a.pushToTalk||a.pushToMute){
+   // Release waits for the configured delay so word endings are not clipped.
+   viewModelScope.launch{if(!pressed)kotlinx.coroutines.delay(a.pushDelayMs.toLong());pushToTalkHeld=pressed;syncAudioGraph()}
+   return
+  }
   val src=_sources.value.firstOrNull{it.type.equals("AUDIO_INPUT",true)} ?: return
   val root=runCatching{org.json.JSONObject(src.configJson)}.getOrDefault(org.json.JSONObject());val j=root.optJSONObject("settings")?:root
   j.put("muted",!pressed)
@@ -405,14 +451,14 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
    bitrate=v.videoBitrateKbps*1_000
   )
  }
+ private fun withReconnect(c:StreamConfig):StreamConfig{val a=advancedSettings.value;return c.copy(autoReconnect=a.autoReconnect,reconnectDelayMs=a.reconnectDelaySec*1_000L,maxReconnectAttempts=if(a.autoReconnect)a.maxRetries else 0)}
  fun startStreaming()=viewModelScope.launch{
   val routes=audioRoutes(); val monitor=monitorDeviceId(); val playback=renderedItems().any{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}
   _streamError.value=null
   // A destination picked this session (YouTube picker / custom dialog) wins; otherwise use Settings → Stream.
   val destination=_streamConfig.value.takeIf{it.ingestionUrl.isNotBlank()}?:savedDestination()
   if(destination==null){_streamError.value="No stream destination yet. Open Settings → Stream, choose a service and paste your stream key.";return@launch}
-  runCatching{engine.startStreaming(destination.copy(audioDeviceIds=routes.map{it.deviceId},audioInputs=routes,monitorDeviceId=monitor,monitorEnabled=monitor!=null,audioPlaybackCaptureEnabled=playback))}
-   .onSuccess{if(generalSettings.value.autoRecordWhenStreaming&&engine.recordState.value==RecordState.IDLE)startRecording()}
+  runCatching{engine.startStreaming(withReconnect(destination).copy(audioDeviceIds=routes.map{it.deviceId},audioInputs=routes,monitorDeviceId=monitor,monitorEnabled=monitor!=null,audioPlaybackCaptureEnabled=playback))}
    .onFailure{_streamError.value=it.message ?: "Streaming could not start."}
  }
  fun stopStreaming()=viewModelScope.launch{engine.stopStreaming()}
@@ -422,5 +468,11 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
  }
  fun stopRecording()=viewModelScope.launch{engine.stopRecording()}
  override fun onCleared(){NativeAudioGraph.stop();super.onCleared()}
- fun pauseRecording()=viewModelScope.launch{engine.pauseRecording()};fun toggleStudioMode(){_isStudio.value=!_isStudio.value};fun selectTransition(v:String){_transition.value=v};fun saveReplay()=viewModelScope.launch{engine.saveReplayBuffer()};fun startReplay()=viewModelScope.launch{engine.startReplayBuffer(30,256)}
+ fun pauseRecording()=viewModelScope.launch{engine.pauseRecording()};fun toggleStudioMode(){_isStudio.value=!_isStudio.value};fun selectTransition(v:String){_transition.value=v};fun saveReplay()=viewModelScope.launch{runCatching{engine.saveReplayBuffer()}};fun startReplay()=viewModelScope.launch{runCatching{engine.startReplayBuffer(30,256)}}
+}
+
+/** Ids of the OBS-style global audio sources (not stored as scene rows). */
+object GlobalAudio {
+ const val DESKTOP="global:desktop"
+ const val MIC="global:mic"
 }

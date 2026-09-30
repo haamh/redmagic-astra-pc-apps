@@ -1,5 +1,7 @@
 package com.stream4k60.app.ui.main
 
+import com.stream4k60.app.data.model.HotkeyAction
+import androidx.compose.runtime.rememberUpdatedState
 import com.stream4k60.app.ui.dialogs.ConfirmStopDialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import android.app.Activity
@@ -42,6 +44,8 @@ fun MainStudioScreen(
     // Everything the program shows, including the contents of nested scenes and groups.
     val renderSources by vm.renderSources.collectAsState()
     val renderItems = remember(renderSources) { renderSources.map { it.item } }
+    // Scene sources plus the global Desktop Audio / Mic sources from Settings → Audio.
+    val audioItems by vm.audioItems.collectAsState()
     val groupChildren by vm.groupChildren.collectAsState()
     // Sources that can be opened for editing: the active scene's items and the contents of its groups.
     fun editable(id: String?): SourceItem? = id?.let { key -> sources.firstOrNull { it.id == key } ?: groupChildren.values.flatten().firstOrNull { it.id == key } }
@@ -60,7 +64,7 @@ fun MainStudioScreen(
     var showProjectionGuideDialog by remember{mutableStateOf(false)}
     var showProjectionRetryDialog by remember{mutableStateOf(false)}
     val screenIds=renderItems.filter{it.type.equals("SCREEN_CAPTURE",true)&&it.isVisible}.map{it.id}
-    val playbackIds=renderItems.filter{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}.map{it.id}
+    val playbackIds=audioItems.filter{it.type.equals("PLAYBACK_AUDIO",true)&&it.isVisible}.map{it.id}
     val playback=playbackIds.isNotEmpty()
     val projectionLauncher=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
         projectionRequested=false
@@ -99,7 +103,7 @@ fun MainStudioScreen(
     // Transform-only edits should update the compositor without restarting capture sources.
     val captureSources = renderItems.map { it.copy(transformJson = "{}") }
     DisposableEffect(Unit){usb.initialize();browser.attachHost((ctx as Activity).findViewById(android.R.id.content) as ViewGroup);onDispose{camera.stopAll();bitmap.stop();media.stopAll();browser.stopAll();usb.shutdown();NativeEngine.setPreviewSurface(null)}}
-    LaunchedEffect(captureSources,videoConfig,usbDevices){
+    LaunchedEffect(captureSources,videoConfig,usbDevices,playbackIds){
         camera.sync(renderItems);bitmap.sync(renderItems);media.sync(renderItems);browser.sync(renderItems)
         if(screenIds.isEmpty() && !playback){
             com.stream4k60.app.service.ProjectionCaptureService.stop(ctx)
@@ -147,17 +151,23 @@ fun MainStudioScreen(
         (shownContainerIds-containerIds).forEach(NativeEngine::removeSourceLayer)
         shownContainerIds=containerIds
     }
+    val currentScenes = rememberUpdatedState(scenes)
     DisposableEffect(Unit) {
-        HotkeyDispatcher.attach(
-            startStream = { vm.startStreaming() },
-            stopStream = { vm.stopStreaming() },
-            startRecord = { vm.startRecording() },
-            stopRecord = { vm.stopRecording() },
-            replay = { vm.startReplay() },
-            studio = { vm.toggleStudioMode() },
-            toggleMic = { vm.togglePrimaryMicMute() },
-            ptt = { pressed -> vm.setPushToTalk(pressed) }
-        )
+        HotkeyDispatcher.attach { action, pressed ->
+            when (action) {
+                HotkeyAction.START_STREAM -> vm.startStreaming()
+                HotkeyAction.STOP_STREAM -> vm.stopStreaming()
+                HotkeyAction.TOGGLE_STREAM -> if (streaming == StudioStreamState.IDLE || streaming == StudioStreamState.ERROR) vm.startStreaming() else vm.stopStreaming()
+                HotkeyAction.STUDIO_MODE -> vm.toggleStudioMode()
+                HotkeyAction.MUTE_MIC -> vm.togglePrimaryMicMute()
+                HotkeyAction.PUSH_TO_TALK -> vm.setPushToTalk(pressed)
+                else -> {
+                    // SCENE_1..SCENE_9 switch to the scene at that position in the Scenes dock.
+                    val index = action.name.removePrefix("SCENE_").toIntOrNull()?.minus(1)
+                    index?.let { currentScenes.value.getOrNull(it) }?.let { vm.setActiveScene(it.id) }
+                }
+            }
+        }
         onDispose { HotkeyDispatcher.detach() }
     }
 
@@ -275,7 +285,7 @@ fun MainStudioScreen(
                     )
                     Row(Modifier.fillMaxWidth().height(m.bottomHeight)) {
                         Dock("Audio Mixer", Modifier.weight(1f).fillMaxHeight()) {
-                            AudioMixerPanel(renderItems, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.fillMaxSize(), showHeader = false)
+                            AudioMixerPanel(audioItems, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.fillMaxSize(), showHeader = false, onFilters = { filteringSource = it })
                         }
                         Dock("Scene Transitions", Modifier.width(m.transitionsWidth).fillMaxHeight()) {
                             TransitionsDockContent(selectedTransition, vm::selectTransition, studio) { active?.id?.let { vm.setActiveScene(it) } }
@@ -283,13 +293,9 @@ fun MainStudioScreen(
                         Dock("Controls", Modifier.width(m.controlsWidth).fillMaxHeight()) {
                             ControlsDockContent(
                                 isStreaming = streaming == StudioStreamState.LIVE,
-                                isRecording = recording == StudioRecordState.RECORDING,
                                 isStudioMode = studio,
                                 onStartStreaming = { vm.startStreaming() },
                                 onStopStreaming = { if (general.confirmStopStreaming) confirmStop = "streaming" else vm.stopStreaming() },
-                                onStartRecording = { vm.startRecording() },
-                                onStopRecording = { if (general.confirmStopRecording) confirmStop = "recording" else vm.stopRecording() },
-                                onReplayBuffer = { vm.startReplay() },
                                 onToggleStudio = { vm.toggleStudioMode() },
                                 onSettings = { onOpenSettings("General") }
                             )
@@ -300,7 +306,6 @@ fun MainStudioScreen(
         }
         StudioStatusBar(
             isStreaming = streaming == StudioStreamState.LIVE,
-            isRecording = recording == StudioRecordState.RECORDING,
             targetFps = videoConfig.frameRate,
             thermal = AstraDeviceMonitor.label(thermalStatus)
         )
@@ -309,7 +314,7 @@ fun MainStudioScreen(
         ConfirmStopDialog(
             actionType = what,
             onDismiss = { confirmStop = null },
-            onConfirm = { if (what == "streaming") vm.stopStreaming() else vm.stopRecording(); confirmStop = null }
+            onConfirm = { vm.stopStreaming(); confirmStop = null }
         )
     }
     if(search)FeatureSearchSheet(entries){search=false}

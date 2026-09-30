@@ -14,6 +14,8 @@ data class StreamConfig(
     val keyframeInterval: Int = 2,
     val hdr: Boolean = false,
     val autoReconnect: Boolean = true,
+    val reconnectDelayMs: Long = 2_000,
+    val maxReconnectAttempts: Int = 20,
     val audioDeviceIds: List<Int> = emptyList(),
     val audioInputs: List<AudioInputRoute> = emptyList(),
     val monitorDeviceId: Int? = null,
@@ -35,8 +37,6 @@ data class StreamSettings(
 /** Studio behaviour toggles (Settings → General). */
 data class GeneralSettings(
     val confirmStopStreaming: Boolean = true,
-    val confirmStopRecording: Boolean = true,
-    val autoRecordWhenStreaming: Boolean = false,
     val snappingEnabled: Boolean = true,
     val snapToSources: Boolean = true
 )

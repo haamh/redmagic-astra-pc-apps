@@ -69,7 +69,7 @@ class StreamOutputSession(private val context: Context){
         } else {
             when(config.protocol){
                 StreamProtocol.HLS -> hls=YouTubeHlsPublisher(config.ingestionUrl).also{it.start(mime)}
-                StreamProtocol.RTMP, StreamProtocol.RTMPS -> rtmp=RtmpPublisher{_,_->}.also{ok -> check(ok.start(config.ingestionUrl,config.streamName,config.protocol==StreamProtocol.RTMPS,config.outputWidth,config.outputHeight,config.fps,config.outputCodec)) { "RTMP(S) publisher could not start" }}
+                StreamProtocol.RTMP, StreamProtocol.RTMPS -> rtmp=RtmpPublisher{_,_->}.also{ok -> ok.configureReconnect(config.autoReconnect,config.reconnectDelayMs,config.maxReconnectAttempts);check(ok.start(config.ingestionUrl,config.streamName,config.protocol==StreamProtocol.RTMPS,config.outputWidth,config.outputHeight,config.fps,config.outputCodec)) { "RTMP(S) publisher could not start" }}
                 else -> error("Unsupported output protocol: ${config.protocol}")
             }
         }

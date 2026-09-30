@@ -1,114 +1,65 @@
 package com.stream4k60.app.engine
 
 import android.view.KeyEvent
-import java.util.concurrent.CopyOnWriteArrayList
+import com.stream4k60.app.data.model.HotkeyAction
+import com.stream4k60.app.data.model.HotkeyBinding
+import java.util.concurrent.CopyOnWriteArraySet
 
 /**
- * Process-wide keyboard dispatcher for an external keyboard/mouse workstation. The Activity owns
- * Android key events; the active Studio screen registers actions here, avoiding Compose focus
- * dependencies and making shortcuts work while a settings panel or source property editor is open.
+ * Process-wide keyboard dispatcher for an external keyboard, mouse or controller. The Activity owns Android key
+ * events; the Studio screen registers actions here, so shortcuts work while a settings panel or editor is open.
+ * Bindings come from Settings → Hotkeys.
  */
 object HotkeyDispatcher {
-    private data class Binding(val keyCode: Int, val modifiers: Int)
-    private val down = CopyOnWriteArrayList<Int>()
-    @Volatile private var active = false
-    @Volatile private var onStartStream: (() -> Unit)? = null
-    @Volatile private var onStopStream: (() -> Unit)? = null
-    @Volatile private var onStartRecord: (() -> Unit)? = null
-    @Volatile private var onStopRecord: (() -> Unit)? = null
-    @Volatile private var onReplay: (() -> Unit)? = null
-    @Volatile private var onStudio: (() -> Unit)? = null
-    @Volatile private var onToggleMic: (() -> Unit)? = null
-    @Volatile private var onPtt: ((Boolean) -> Unit)? = null
+    const val MODIFIER_MASK = KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON or KeyEvent.META_ALT_ON or KeyEvent.META_META_ON
 
-    // Desktop-friendly defaults. They only activate with Ctrl+Shift so normal Android text input
-    // is never consumed.
-    private val bindings = mapOf(
-        "start_stream" to Binding(KeyEvent.KEYCODE_S, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON),
-        "stop_stream" to Binding(KeyEvent.KEYCODE_X, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON),
-        "start_record" to Binding(KeyEvent.KEYCODE_R, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON),
-        "stop_record" to Binding(KeyEvent.KEYCODE_T, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON),
-        "replay" to Binding(KeyEvent.KEYCODE_F10, KeyEvent.META_CTRL_ON),
-        "studio" to Binding(KeyEvent.KEYCODE_F11, KeyEvent.META_CTRL_ON),
-        "toggle_mic" to Binding(KeyEvent.KEYCODE_M, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON),
-        "ptt" to Binding(KeyEvent.KEYCODE_SPACE, KeyEvent.META_CTRL_ON)
-    )
+    /** Defaults use Ctrl/Ctrl+Shift so ordinary typing is never consumed. */
+    val defaultBindings: Map<HotkeyAction, HotkeyBinding> = mapOf(
+        HotkeyAction.START_STREAM to HotkeyBinding(KeyEvent.KEYCODE_S, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON),
+        HotkeyAction.STOP_STREAM to HotkeyBinding(KeyEvent.KEYCODE_X, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON),
+        HotkeyAction.STUDIO_MODE to HotkeyBinding(KeyEvent.KEYCODE_F11, KeyEvent.META_CTRL_ON),
+        HotkeyAction.MUTE_MIC to HotkeyBinding(KeyEvent.KEYCODE_M, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON),
+        HotkeyAction.PUSH_TO_TALK to HotkeyBinding(KeyEvent.KEYCODE_SPACE, KeyEvent.META_CTRL_ON)
+    ) + (1..9).associate { n -> HotkeyAction.valueOf("SCENE_$n") to HotkeyBinding(KeyEvent.KEYCODE_1 + n - 1, KeyEvent.META_CTRL_ON) }
 
-    fun attach(
-        startStream: () -> Unit,
-        stopStream: () -> Unit,
-        startRecord: () -> Unit,
-        stopRecord: () -> Unit,
-        replay: () -> Unit,
-        studio: () -> Unit,
-        toggleMic: () -> Unit,
-        ptt: (Boolean) -> Unit
-    ) {
-        onStartStream = startStream
-        onStopStream = stopStream
-        onStartRecord = startRecord
-        onStopRecord = stopRecord
-        onReplay = replay
-        onStudio = studio
-        onToggleMic = toggleMic
-        onPtt = ptt
-        active = true
-    }
+    @Volatile private var bindings: Map<HotkeyAction, HotkeyBinding> = defaultBindings
+    @Volatile private var handler: ((HotkeyAction, Boolean) -> Unit)? = null
+    private val held = CopyOnWriteArraySet<HotkeyAction>()
 
-    fun detach() {
-        active = false
-        onStartStream = null
-        onStopStream = null
-        onStartRecord = null
-        onStopRecord = null
-        onReplay = null
-        onStudio = null
-        onToggleMic = null
-        onPtt = null
-        down.clear()
-    }
+    fun setBindings(value: Map<HotkeyAction, HotkeyBinding>) { bindings = value }
+
+    /** [onAction] receives each action; `pressed` is false only for the release of push-to-talk. */
+    fun attach(onAction: (HotkeyAction, pressed: Boolean) -> Unit) { handler = onAction }
+
+    fun detach() { handler = null; held.clear() }
 
     fun handle(event: KeyEvent): Boolean {
-        if (!active) return false
-        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0) {
-            if (matches("ptt", event)) onPtt?.invoke(true)
-            return matchesAnyNonRepeating(event)
-        }
-        if (event.action == KeyEvent.ACTION_UP) {
-            if (matches("ptt", event)) onPtt?.invoke(false)
-            return matchesAny(event)
-        }
-        return false
-    }
-
-    private fun matchesAnyNonRepeating(event: KeyEvent): Boolean {
+        val h = handler ?: return false
         val action = actionFor(event) ?: return false
-        if (down.contains(event.keyCode)) return true
-        down += event.keyCode
-        when (action) {
-            "start_stream" -> onStartStream?.invoke()
-            "stop_stream" -> onStopStream?.invoke()
-            "start_record" -> onStartRecord?.invoke()
-            "stop_record" -> onStopRecord?.invoke()
-            "replay" -> onReplay?.invoke()
-            "studio" -> onStudio?.invoke()
-            "toggle_mic" -> onToggleMic?.invoke()
-            "ptt" -> Unit
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                // Fire once per press; auto-repeat while held is swallowed.
+                if (event.repeatCount == 0 && held.add(action)) h(action, true)
+            }
+            KeyEvent.ACTION_UP -> {
+                held.remove(action)
+                if (action == HotkeyAction.PUSH_TO_TALK) h(action, false)
+            }
         }
         return true
     }
 
-    private fun matchesAny(event: KeyEvent): Boolean {
-        val action = actionFor(event) ?: return false
-        down.remove(event.keyCode)
-        return action.isNotEmpty()
+    fun actionFor(event: KeyEvent): HotkeyAction? {
+        val mods = event.metaState and MODIFIER_MASK
+        return bindings.entries.firstOrNull { (_, b) -> b.keyCode == event.keyCode && (b.modifiers and MODIFIER_MASK) == mods }?.key
     }
 
-    private fun matches(name: String, event: KeyEvent): Boolean = bindings[name]?.let { matches(it, event) } ?: false
-    private fun actionFor(event: KeyEvent): String? = bindings.entries.firstOrNull { matches(it.value, event) }?.key
-    private fun matches(binding: Binding, event: KeyEvent): Boolean {
-        val relevant = event.metaState and (KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON or KeyEvent.META_ALT_ON or KeyEvent.META_META_ON)
-        val expected = binding.modifiers and (KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON or KeyEvent.META_ALT_ON or KeyEvent.META_META_ON)
-        return event.keyCode == binding.keyCode && relevant == expected
-    }
+    /** Human-readable form such as "Ctrl+Shift+S". */
+    fun describe(binding: HotkeyBinding): String = buildList {
+        if (binding.modifiers and KeyEvent.META_CTRL_ON != 0) add("Ctrl")
+        if (binding.modifiers and KeyEvent.META_ALT_ON != 0) add("Alt")
+        if (binding.modifiers and KeyEvent.META_SHIFT_ON != 0) add("Shift")
+        if (binding.modifiers and KeyEvent.META_META_ON != 0) add("Meta")
+        add(KeyEvent.keyCodeToString(binding.keyCode).removePrefix("KEYCODE_").replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() })
+    }.joinToString("+")
 }

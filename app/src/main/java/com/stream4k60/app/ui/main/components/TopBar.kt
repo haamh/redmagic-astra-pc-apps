@@ -138,10 +138,6 @@ fun TopBar(
                     text = { Text(if (isStudioMode) "Leave Studio Mode" else "Enter Studio Mode") },
                     onClick = { openMenu = null; onToggleStudioMode() }
                 )
-                DropdownMenuItem(
-                    text = { Text("Replay Buffer") },
-                    onClick = { openMenu = null; onReplayBuffer() }
-                )
                 HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Settings…") },
@@ -165,6 +161,5 @@ fun TopBar(
             modifier = Modifier.padding(horizontal = 4.dp)
         )
         if (isStreaming) Text("● LIVE", color = Color(0xFF33CC66), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp))
-        if (isRecording) Text("● REC", color = Color(0xFFFF4444), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp))
     }
 }

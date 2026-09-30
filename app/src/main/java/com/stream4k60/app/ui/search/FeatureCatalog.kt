@@ -75,9 +75,7 @@ object FeatureCatalog {
         e("Custom RTMP / RTMPS", "Streaming", "Configure a custom server URL and stream key; use compatible ingest services for up to 120 FPS", "custom endpoint server key stream rtmp rtmps 4k120"),
         e("Auto Reconnect", "Streaming", "Bounded reconnect state machine", "reconnect network"),
         e("Live Statistics", "Monitoring", "Bitrate, frames, duration and dropped-frame telemetry", "stats bitrate dropped"),
-        e("Recording", "Output", "Local hardware-encoded recording", "record local"),
         e("Simultaneous Stream + Record", "Output", "One encoded frame path feeding independent sinks", "record stream simultaneously"),
-        e("Replay Buffer", "Output", "Encoded rolling buffer saved on demand", "instant replay"),
         e("Screenshot", "Output", "Program-frame capture", "screenshot snapshot"),
         e("Hotkeys", "Controls", "USB/Bluetooth keyboard actions", "keyboard shortcuts"),
         e("Push-to-Talk", "Controls", "Keyboard-triggered microphone routing", "ptt talk"),
@@ -126,7 +124,7 @@ object FeatureCatalog {
         "Balance / Pan", "Mute", "Solo", "Monitor Routing", "Audio Sync Offset", "Video Filter Chain", "Chroma Key", "Color Key", "Luma Key", "Color Correction",
         "Image", "Image Slideshow", "Text", "Color", "Media Source", "Browser Source", "Audio Mixer",
         "YouTube Account", "YouTube Broadcast Picker", "YouTube RTMPS", "YouTube HLS / HEVC", "Custom RTMP / RTMPS", "4K120 hardware output", "Auto Reconnect",
-        "Live Statistics", "Recording", "Replay Buffer", "Screenshot", "Hotkeys", "Push-to-Talk", "Push-to-Mute",
+        "Live Statistics", "Screenshot", "Hotkeys", "Push-to-Talk", "Push-to-Mute",
         "Global Search", "OBS Profile Import", "OBS Scene Collection Import", "OBS Asset Relinking", "Imported Canvas Layout",
         "Accessibility", "USB Device Manager", "Isochronous USB", "Bulk USB",
         "A/V Clocking", "Native ARM64 Engine", "GPU Compositor", "Android Foreground Capture", "4K60 H.264",
@@ -152,7 +150,6 @@ object FeatureCatalog {
         "YouTube Account", "YouTube Broadcast Picker", "YouTube RTMPS", "YouTube HLS / HEVC" -> openYouTube
         "Custom RTMP / RTMPS" -> openCustomStream
         "OBS Profile Import", "OBS Scene Collection Import", "OBS Asset Relinking", "Imported Canvas Layout" -> openProfiles
-        "Replay Buffer" -> startReplay
         "Studio Mode" -> toggleStudio
         "Camera" -> {{ addSource("CAMERA") }}
         "USB Capture" -> {{ addSource("USB_CAPTURE") }}

@@ -49,6 +49,11 @@ class RtmpPublisher(private val onState:(State,String)->Unit={_,_->}){
     private var reconnectHeight=2160
     private var reconnectFps=60
     private var reconnectCodec=OutputCodec.H264
+    @Volatile private var reconnectEnabled=true
+    @Volatile private var reconnectDelayMs=2_000L
+    @Volatile private var maxReconnectAttempts=20
+    /** Settings → Advanced: retry a dropped connection [maxAttempts] times, starting [delayMs] apart. */
+    fun configureReconnect(enabled:Boolean,delayMs:Long,maxAttempts:Int){reconnectEnabled=enabled&&maxAttempts>0;reconnectDelayMs=delayMs.coerceIn(250,60_000);maxReconnectAttempts=maxAttempts.coerceIn(0,1000)}
     private var videoCodec=OutputCodec.H264
 
     fun start(url:String,streamKey:String,tls:Boolean,width:Int=3840,height:Int=2160,fps:Int=60,codec:OutputCodec=OutputCodec.H264,timeoutMs:Long=20_000):Boolean {
@@ -169,12 +174,13 @@ class RtmpPublisher(private val onState:(State,String)->Unit={_,_->}){
     }
 
     private fun scheduleReconnect(reason:String){
+        if(!reconnectEnabled){state=State.ERROR;onState(state,"Connection lost: $reason");return}
         if(!reconnecting.compareAndSet(false,true))return
         state=State.CONNECTING
         onState(state,"Connection lost; reconnecting")
         reconnectThread=Thread({
-            var delay=500L
-            repeat(8){
+            var delay=reconnectDelayMs
+            repeat(maxReconnectAttempts){
                 if(!reconnecting.get())return@Thread
                 Thread.sleep(delay)
                 if(!reconnecting.get())return@Thread
@@ -187,7 +193,7 @@ class RtmpPublisher(private val onState:(State,String)->Unit={_,_->}){
                     reconnecting.set(false)
                     return@Thread
                 }.onFailure{
-                    delay=(delay*2).coerceAtMost(8_000L)
+                    delay=(delay*2).coerceAtMost(maxOf(reconnectDelayMs,30_000L))
                 }
             }
             reconnecting.set(false)

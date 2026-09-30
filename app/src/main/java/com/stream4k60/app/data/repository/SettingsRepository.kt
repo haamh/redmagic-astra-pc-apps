@@ -36,11 +36,58 @@ class SettingsRepository(private val profiles: ProfileDao) {
 
     suspend fun saveGeneralSettings(settings: GeneralSettings) = updateSection("general", buildJsonObject {
         put("confirmStopStreaming", settings.confirmStopStreaming)
-        put("confirmStopRecording", settings.confirmStopRecording)
-        put("autoRecordWhenStreaming", settings.autoRecordWhenStreaming)
         put("snappingEnabled", settings.snappingEnabled)
         put("snapToSources", settings.snapToSources)
     })
+
+    val audioSettings: Flow<AudioSettings> = sectionFlow("audio") { j ->
+        val d = AudioSettings()
+        AudioSettings(
+            j.bool("desktopAudioEnabled", d.desktopAudioEnabled), j.int("micDeviceId", d.micDeviceId), j.int("monitorDeviceId", d.monitorDeviceId),
+            j.bool("pushToTalk", d.pushToTalk), j.bool("pushToMute", d.pushToMute), j.int("pushDelayMs", d.pushDelayMs),
+            j.text("desktopConfig", d.desktopConfig), j.text("micConfig", d.micConfig)
+        )
+    }
+    suspend fun saveAudioSettings(a: AudioSettings) = updateSection("audio", buildJsonObject {
+        put("desktopAudioEnabled", a.desktopAudioEnabled); put("micDeviceId", a.micDeviceId); put("monitorDeviceId", a.monitorDeviceId)
+        put("pushToTalk", a.pushToTalk); put("pushToMute", a.pushToMute); put("pushDelayMs", a.pushDelayMs)
+        put("desktopConfig", a.desktopConfig); put("micConfig", a.micConfig)
+    })
+
+    val advancedSettings: Flow<AdvancedSettings> = sectionFlow("advanced") { j ->
+        val d = AdvancedSettings()
+        AdvancedSettings(j.bool("autoReconnect", d.autoReconnect), j.int("reconnectDelaySec", d.reconnectDelaySec), j.int("maxRetries", d.maxRetries))
+    }
+    suspend fun saveAdvancedSettings(a: AdvancedSettings) = updateSection("advanced", buildJsonObject {
+        put("autoReconnect", a.autoReconnect); put("reconnectDelaySec", a.reconnectDelaySec); put("maxRetries", a.maxRetries)
+    })
+
+    /** Hotkeys; null means "use the defaults" (no bindings saved yet). */
+    val hotkeys: Flow<Map<HotkeyAction, HotkeyBinding>?> = profiles.observeActive().map { profile ->
+        val root = runCatching { Json.parseToJsonElement(profile?.configJson ?: "{}") as? JsonObject }.getOrNull()
+        val j = root?.get("hotkeys") as? JsonObject ?: return@map null
+        j.mapNotNull { (k, v) ->
+            val action = HotkeyAction.entries.firstOrNull { it.name == k } ?: return@mapNotNull null
+            val o = v as? JsonObject ?: return@mapNotNull null
+            action to HotkeyBinding(o.int("keyCode", 0), o.int("modifiers", 0))
+        }.toMap()
+    }.distinctUntilChanged()
+    suspend fun saveHotkeys(bindings: Map<HotkeyAction, HotkeyBinding>) = updateSection("hotkeys", buildJsonObject {
+        bindings.forEach { (a, b) -> put(a.name, buildJsonObject { put("keyCode", b.keyCode); put("modifiers", b.modifiers) }) }
+    })
+
+    val accessibilitySettings: Flow<AccessibilitySettings> = sectionFlow("accessibility") { j ->
+        AccessibilitySettings(j["uiScale"]?.jsonPrimitive?.floatOrNull?.coerceIn(0.75f, 1.5f) ?: 1f)
+    }
+    suspend fun saveAccessibilitySettings(a: AccessibilitySettings) = updateSection("accessibility", buildJsonObject { put("uiScale", a.uiScale) })
+
+    private fun <T> sectionFlow(key: String, parse: (JsonObject) -> T): Flow<T> = profiles.observeActive().map { profile ->
+        val root = runCatching { Json.parseToJsonElement(profile?.configJson ?: "{}") as? JsonObject }.getOrNull()
+        parse(root?.get(key) as? JsonObject ?: JsonObject(emptyMap()))
+    }.distinctUntilChanged()
+    private fun JsonObject.bool(k: String, d: Boolean) = this[k]?.jsonPrimitive?.booleanOrNull ?: d
+    private fun JsonObject.int(k: String, d: Int) = this[k]?.jsonPrimitive?.intOrNull ?: d
+    private fun JsonObject.text(k: String, d: String) = this[k]?.jsonPrimitive?.contentOrNull ?: d
 
     private suspend fun updateSection(key: String, value: JsonObject) {
         val profile = ensureActiveProfile()
@@ -74,8 +121,7 @@ class SettingsRepository(private val profiles: ProfileDao) {
         fun bool(k: String, d: Boolean) = general[k]?.jsonPrimitive?.booleanOrNull ?: d
         val defaults = GeneralSettings()
         return GeneralSettings(
-            bool("confirmStopStreaming", defaults.confirmStopStreaming), bool("confirmStopRecording", defaults.confirmStopRecording),
-            bool("autoRecordWhenStreaming", defaults.autoRecordWhenStreaming), bool("snappingEnabled", defaults.snappingEnabled),
+            bool("confirmStopStreaming", defaults.confirmStopStreaming), bool("snappingEnabled", defaults.snappingEnabled),
             bool("snapToSources", defaults.snapToSources)
         )
     }

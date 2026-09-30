@@ -24,7 +24,8 @@ fun AudioMixerPanel(
     onSourceConfigChanged: (SourceItem, String) -> Unit,
     peakProvider: (String) -> Float = { 0f },
     modifier: Modifier = Modifier,
-    showHeader: Boolean = true
+    showHeader: Boolean = true,
+    onFilters: ((SourceItem) -> Unit)? = null
 ) {
     val audioSources = sources.filter {
         it.type.equals("AUDIO_INPUT", true) || it.type.equals("PLAYBACK_AUDIO", true) || it.type.equals("MEDIA", true) ||
@@ -61,7 +62,7 @@ fun AudioMixerPanel(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             audioSources.forEach { src ->
-                AudioStrip(src, onSourceConfigChanged, peakProvider, Modifier.width(94.dp).heightIn(min = 160.dp))
+                AudioStrip(src, onSourceConfigChanged, peakProvider, Modifier.width(94.dp).heightIn(min = 160.dp), onFilters)
             }
         }
     }
@@ -72,7 +73,8 @@ private fun AudioStrip(
     source: SourceItem,
     onSourceConfigChanged: (SourceItem, String) -> Unit,
     peakProvider: (String) -> Float,
-    modifier: Modifier
+    modifier: Modifier,
+    onFilters: ((SourceItem) -> Unit)? = null
 ) {
     val state = remember(source.id, source.configJson) {
         val root = runCatching { JSONObject(source.configJson) }.getOrDefault(JSONObject())
@@ -134,6 +136,11 @@ private fun AudioStrip(
                 }
             }
             Text("Sync ${state.syncOffsetMs} ms", fontSize = 8.sp)
+            if (onFilters != null) {
+                TextButton(onClick = { onFilters(source) }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                    Text("Filters", fontSize = 9.sp)
+                }
+            }
         }
     }
 }

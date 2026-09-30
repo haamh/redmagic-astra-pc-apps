@@ -131,35 +131,27 @@ fun TransitionsDockContent(selected: String, onSelect: (String) -> Unit, isStudi
 @Composable
 fun ControlsDockContent(
     isStreaming: Boolean,
-    isRecording: Boolean,
     isStudioMode: Boolean,
     onStartStreaming: () -> Unit,
     onStopStreaming: () -> Unit,
-    onStartRecording: () -> Unit,
-    onStopRecording: () -> Unit,
-    onReplayBuffer: () -> Unit,
     onToggleStudio: () -> Unit,
     onSettings: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().padding(6.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         ObsButton(if (isStreaming) "Stop Streaming" else "Start Streaming", if (isStreaming) onStopStreaming else onStartStreaming, active = isStreaming)
-        ObsButton(if (isRecording) "Stop Recording" else "Start Recording", if (isRecording) onStopRecording else onStartRecording, active = isRecording)
-        ObsButton("Start Replay Buffer", onReplayBuffer)
         ObsButton("Studio Mode", onToggleStudio, active = isStudioMode)
         ObsButton("Settings", onSettings)
     }
 }
 
-/** OBS's status bar: LIVE and REC timers, FPS and render time from the compositor, thermal state. */
+/** OBS's status bar: LIVE timer, FPS and render time from the compositor, thermal state. */
 @Composable
-fun StudioStatusBar(isStreaming: Boolean, isRecording: Boolean, targetFps: Int, thermal: String, modifier: Modifier = Modifier) {
+fun StudioStatusBar(isStreaming: Boolean, targetFps: Int, thermal: String, modifier: Modifier = Modifier) {
     var liveSeconds by remember { mutableLongStateOf(0L) }
-    var recSeconds by remember { mutableLongStateOf(0L) }
     var fps by remember { mutableFloatStateOf(0f) }
     var renderMs by remember { mutableFloatStateOf(0f) }
     var dropped by remember { mutableIntStateOf(0) }
     LaunchedEffect(isStreaming) { liveSeconds = 0; while (isStreaming) { delay(1000); liveSeconds++ } }
-    LaunchedEffect(isRecording) { recSeconds = 0; while (isRecording) { delay(1000); recSeconds++ } }
     LaunchedEffect(Unit) {
         var lastFrames = runCatching { NativeEngine.getTotalFrames() }.getOrDefault(0L)
         val droppedAtStart = runCatching { NativeEngine.getDroppedFrames() }.getOrDefault(0L)
@@ -180,7 +172,6 @@ fun StudioStatusBar(isStreaming: Boolean, isRecording: Boolean, targetFps: Int, 
         Text("Thermal: $thermal", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.weight(1f))
         StatusDot(isStreaming); Text("LIVE ${clock(liveSeconds)}", fontSize = 11.sp)
-        StatusDot(isRecording); Text("REC ${clock(recSeconds)}", fontSize = 11.sp)
         Text(String.format(Locale.US, "Render %.1f ms", renderMs), fontSize = 11.sp)
         Text("Dropped $dropped", fontSize = 11.sp)
         Text(String.format(Locale.US, "%.2f / %d FPS", fps, targetFps), fontSize = 11.sp)

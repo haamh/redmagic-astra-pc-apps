@@ -17,10 +17,20 @@ import com.stream4k60.app.navigation.AppNavHost
 import com.stream4k60.app.engine.HotkeyDispatcher
 import android.view.KeyEvent
 import com.stream4k60.app.ui.theme.Stream4k60Theme
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import com.stream4k60.app.data.model.AccessibilitySettings
+import com.stream4k60.app.data.repository.SettingsRepository
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    @Inject lateinit var settingsRepository: SettingsRepository
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -41,12 +51,17 @@ class MainActivity : ComponentActivity() {
         
         requestPermissions()
         setContent {
-            Stream4k60Theme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    AppNavHost()
+            // Settings → Accessibility → UI scale resizes the whole app.
+            val access by settingsRepository.accessibilitySettings.collectAsState(AccessibilitySettings())
+            val base = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(base.density * access.uiScale, base.fontScale)) {
+                Stream4k60Theme {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        AppNavHost()
+                    }
                 }
             }
         }

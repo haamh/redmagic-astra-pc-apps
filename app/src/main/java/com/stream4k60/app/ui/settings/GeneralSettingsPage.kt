@@ -17,11 +17,6 @@ fun GeneralSettingsPage(viewModel: SettingsViewModel) {
         SettingsSection("Output") {
             SettingsToggle("Show confirmation dialog when stopping streams", s.confirmStopStreaming,
                 { viewModel.saveGeneralSettings(s.copy(confirmStopStreaming = it)) })
-            SettingsToggle("Show confirmation dialog when stopping recordings", s.confirmStopRecording,
-                { viewModel.saveGeneralSettings(s.copy(confirmStopRecording = it)) })
-            SettingsToggle("Automatically record when streaming", s.autoRecordWhenStreaming,
-                { viewModel.saveGeneralSettings(s.copy(autoRecordWhenStreaming = it)) },
-                description = "Starts a recording whenever you go live.")
         }
         SettingsSection("Snapping") {
             SettingsToggle("Enable source snapping", s.snappingEnabled,
