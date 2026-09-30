@@ -318,7 +318,8 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
   val audioSources=renderedItems().filter{it.isVisible&&(it.type.uppercase() in setOf("AUDIO_INPUT","AUDIO_OUTPUT","PLAYBACK_AUDIO") || it.type.equals("USB_CAPTURE",true)&&sourceAudioSettings(it.configJson).optInt("audioDeviceId",-1)>=0)}
   val reportIds=audioSources.map{it.id}.toSet()
   val missingDeviceIds=audioSources.filter{source->
-   source.type.equals("AUDIO_INPUT",true)&&sourceAudioSettings(source.configJson).optInt("deviceId",-1)<0 ||
+   // Mic/Aux on "Default" uses Android's current input (-1); that is a valid choice, not a missing device.
+   source.type.equals("AUDIO_INPUT",true)&&source.id!=GlobalAudio.MIC&&sourceAudioSettings(source.configJson).optInt("deviceId",-1)<0 ||
     source.type.equals("AUDIO_OUTPUT",true)&&sourceSettings(source.configJson).optInt("deviceId",-1)<0
   }.map{it.id}.toSet()
   val configuredReportIds=reportIds-missingDeviceIds

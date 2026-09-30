@@ -27,7 +27,12 @@ adb shell cat /sdcard/Android/data/com.stream4k60.app/files/native-crash.txt
 - The APK is ~76 MB. Build outputs are not committed.
 
 ### Open problems (do these next)
-1. **Insta360 (direct USB).** Android does NOT list it in the camera service on the Astra, so only direct UVC is possible. The last device error was our own bandwidth pre-check wrongly refusing 1080p60 MJPEG: it estimated 4 bits/pixel, and the budget used the camera's USB 2.0 descriptor speed. **That pre-check has been removed entirely** (`NativeUsbManager.startCapture`). Whether frames now arrive is untested; the next error, if any, will be the real UVC negotiation or transfer failure (see Properties / `source-errors.txt`; code in `engine/UvcCaptureSession.kt`, `cpp/usb/uvc_iso_stream.cpp`, `uvc_bulk_stream.cpp`).
+1. **Insta360 (direct USB).** Android does not list it as a camera, so direct UVC is the only route.
+   - The bandwidth pre-check that refused 1080p60 MJPEG was removed.
+   - The next device error was `Failed to initialize video/mjpeg … NAME_NOT_FOUND`: **the Astra has no MJPEG MediaCodec**.
+   - MJPEG now falls back to software decoding (`UvcCaptureSession.decodeJpeg`): BitmapFactory (libjpeg-turbo) decodes into a reused bitmap, which is drawn into the source surface with `lockHardwareCanvas`. Only the newest frame is decoded.
+   - `MjpegFrames.withHuffmanTables` inserts the standard JPEG DHT tables that UVC webcams omit. The table bytes were checked with a real decoder: a table-stripped JPEG with the tables re-inserted decodes pixel-identical.
+   - Still untested on the device. Watch the achieved FPS at 1080p60; if it's too slow, add a second decode thread or a native libjpeg-turbo path.
    - **Missing webcams:** USB permission requests were fired for all devices at once and Android dropped all but one. They are now queued one at a time, and USB source Properties has a **Rescan USB devices** button.
 2. **Audio input error** (the user's audio input source): full message not yet received. Only the UVC streaming interface is claimed, so the camera path should not steal the Insta360 mic. Errors come from `MainStudioViewModel` `syncAudioGraph`/`audioRoutes`.
 3. The mixer's two meter bars show the same level: the engine reports one peak per source. Mono and the audio track checkboxes are not implemented.

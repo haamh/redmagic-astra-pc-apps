@@ -40,6 +40,9 @@ class UvcCaptureSession(
 
     private val running = AtomicBoolean(false)
     private var decoder: MediaCodec? = null
+    /** Set when the phone has no MJPEG MediaCodec (the Astra doesn't): frames are decoded on the CPU instead. */
+    private var softwareJpeg = false
+    private var jpegBitmap: android.graphics.Bitmap? = null
     private var streamInterface: UsbInterface? = null
     private var endpoint: UsbEndpoint? = null
     private var selectedFormat: Format? = null
@@ -78,8 +81,12 @@ class UvcCaptureSession(
         NativeEngine.setSourceEffectsFromConfig(sourceId, sourceConfigJson)
         NativeEngine.setSourceBufferSize(sourceId, selected.width, selected.height)
         if (selected.codec.uppercase() in setOf("MJPEG","H264","HEVC","H265","AVC")) {
-            decoder = createDecoder(selected, surface!!)
-            decoder?.start()
+            val hw = runCatching { createDecoder(selected, surface!!) }
+            if (hw.isSuccess) { decoder = hw.getOrThrow(); decoder?.start() }
+            else if (selected.codec.equals("MJPEG", true)) {
+                android.util.Log.i("Stream4k60", "No MJPEG MediaCodec (${hw.exceptionOrNull()?.message}); decoding MJPEG in software")
+                softwareJpeg = true
+            } else throw hw.exceptionOrNull()!!
         }
 
         val fd = connection.fileDescriptor
@@ -87,7 +94,7 @@ class UvcCaptureSession(
         // Mark the session live before submitting the first URBs; an attached device may
         // deliver the first frame immediately after SUBMITURB.
         running.set(true)
-        if (decoder != null) {
+        if (decoder != null || softwareJpeg) {
             decodeThread = Thread({ decodeLoop() }, "Stream4k-UVCDecode-${sourceId.take(8)}").apply {
                 priority = Thread.NORM_PRIORITY + 1
                 start()
@@ -245,8 +252,25 @@ class UvcCaptureSession(
     private fun decodeLoop(){
         while(running.get() && !Thread.currentThread().isInterrupted){
             val frame=runCatching{decodeQueue.poll(20,TimeUnit.MILLISECONDS)}.getOrNull() ?: continue
-            feedDecoder(ByteBuffer.wrap(frame.data),frame.ptsUs)
+            if(softwareJpeg)decodeJpeg(frame.data) else feedDecoder(ByteBuffer.wrap(frame.data),frame.ptsUs)
         }
+    }
+
+    /**
+     * Software MJPEG: Android's JPEG decoder (libjpeg-turbo) into a reused bitmap, then drawn into the source's
+     * GPU surface with a hardware canvas. Only the newest frame is decoded, so a slow frame never builds a backlog.
+     */
+    private fun decodeJpeg(data:ByteArray){
+        val target=surface?:return
+        val jpeg=MjpegFrames.withHuffmanTables(data)
+        val opts=android.graphics.BitmapFactory.Options().apply{inMutable=true;inPreferredConfig=android.graphics.Bitmap.Config.ARGB_8888;inBitmap=jpegBitmap}
+        val bmp=try{android.graphics.BitmapFactory.decodeByteArray(jpeg,0,jpeg.size,opts)}catch(_:IllegalArgumentException){
+            // The reusable bitmap no longer fits (size changed): decode into a fresh one.
+            jpegBitmap=null;android.graphics.BitmapFactory.decodeByteArray(jpeg,0,jpeg.size,android.graphics.BitmapFactory.Options().apply{inMutable=true})
+        }?:run{frameErrors++;return}
+        jpegBitmap=bmp
+        val canvas=try{target.lockHardwareCanvas()}catch(_:Throwable){return}
+        try{canvas.drawBitmap(bmp,null,android.graphics.Rect(0,0,canvas.width,canvas.height),null)}finally{runCatching{target.unlockCanvasAndPost(canvas)}}
     }
 
     private fun feedDecoder(frame:ByteBuffer,ptsUs:Long){
