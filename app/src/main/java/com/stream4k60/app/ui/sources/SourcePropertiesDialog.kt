@@ -47,6 +47,7 @@ fun SourcePropertiesDialog(
     onRemapSource: (SourceItem, String) -> Unit = { _, _ -> },
     runtimeError: String? = null,
     peakProvider: (String) -> Float = { 0f },
+    header: (@Composable () -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -155,7 +156,9 @@ fun SourcePropertiesDialog(
 
     val type = source.type.uppercase()
     val configError = remember(context, type, config.toString(), cameraChoices, usbVideo) {
-        validateSourceConfig(context, type, values(), cameraChoices, usbVideo)
+        // Mic/Aux may use Android's default input (-1), chosen in Settings → Audio.
+        if (source.id == "global:mic" && type == "AUDIO_INPUT" && values().optInt("deviceId", -1) < 0) null
+        else validateSourceConfig(context, type, values(), cameraChoices, usbVideo)
     }
     val canApply = configError == null && pickerError == null && invalidNumberFields.isEmpty()
     val title = "${source.name} properties"
@@ -166,6 +169,7 @@ fun SourcePropertiesDialog(
             Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
                 Text(sourceTypeDescription(type), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
+                header?.invoke()
                 SourceLivePreview(source, runtimeError, peakProvider)
                 if (configError != null || pickerError != null || invalidNumberFields.isNotEmpty()) {
                     Text(
@@ -399,7 +403,8 @@ fun SourcePropertiesDialog(
                                 }
                             }
                         }
-                        if (selected == null) Text("Connect and grant permission to a UVC camera or capture card, then select it here.", style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { usbManager.rescan() }) { Text("Rescan USB devices") }
+                        if (selected == null) Text("Connect a UVC camera or capture card and allow each USB permission prompt (one appears per device), then select it here. Missing a camera? Tap Rescan.", style = MaterialTheme.typography.bodySmall)
                         else {
                             ExposedDropdownMenuBox(expanded = formatMenuExpanded, onExpandedChange = { formatMenuExpanded = !formatMenuExpanded }) {
                                 OutlinedTextField(value = usbFormatLabel(config), onValueChange = {}, readOnly = true, label = { Text("Capture format") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(formatMenuExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
@@ -494,7 +499,7 @@ fun SourcePropertiesDialog(
                         }
                     }
                     "AUDIO_INPUT" -> {
-                        val devices = androidAudioDevices(context, AudioManager.GET_DEVICES_INPUTS)
+                        val devices = (if (source.id == "global:mic") listOf(-1 to "Default (Android's current input)") else emptyList()) + androidAudioDevices(context, AudioManager.GET_DEVICES_INPUTS)
                         DeviceDropdown("Audio input", devices, int("deviceId", -1), sourceMenuExpanded, { sourceMenuExpanded = it }) { set("deviceId", it) }
                         NumberField("Sync offset (ms)", "syncOffsetMs", int("syncOffsetMs", 0), -2000..2000, ::set) { valid -> updateNumberValidity("audio.syncOffsetMs", valid) }
                         Text("Volume, balance, mute and monitoring are available in the audio mixer.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

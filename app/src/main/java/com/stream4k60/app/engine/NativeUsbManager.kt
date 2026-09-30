@@ -46,18 +46,27 @@ class NativeUsbManager @Inject constructor(@ApplicationContext private val conte
         val CAPTURE_CARD_VENDORS=mapOf(0x0FD9 to "Elgato",0x07CA to "AVerMedia",0x2935 to "Magewell",0x534D to "Blackmagic",0x1B80 to "Hauppauge",0x0572 to "Conexant",0x04F2 to "Chicony")
         val AUDIO_INTERFACE_VENDORS=mapOf(0x1235 to "Focusrite",0x0582 to "Roland",0x0763 to "M-Audio",0x1397 to "BEHRINGER",0x07FD to "MOTU",0x0644 to "TEAC",0x2573 to "ESI",0x17CC to "Native Instruments",0x0D8C to "C-Media",0x08BB to "Texas Instruments")
         fun estimateBandwidth(width:Int,height:Int,fps:Int,format:String):Int{
-            val bpp=when(format.uppercase()){"MJPEG"->0.5f;"H264","HEVC","H265"->0.18f;"YUY2","YUYV"->2f;"NV12"->1.5f;else->2f}
+            // Compressed rates are typical webcam averages (MJPEG ≈ 1 bit/pixel); uncompressed are exact.
+            val bpp=when(format.uppercase()){"MJPEG"->0.12f;"H264","HEVC","H265"->0.03f;"YUY2","YUYV"->2f;"NV12"->1.5f;else->2f}
             return ((width.toLong()*height*fps*bpp*8)/1_000_000L).toInt().coerceAtLeast(1)
         }
     }
 
-    private val receiver=object:BroadcastReceiver(){override fun onReceive(c:Context,i:Intent){when(i.action){UsbManager.ACTION_USB_DEVICE_ATTACHED->extra(i)?.let{requestOrOpen(it)};UsbManager.ACTION_USB_DEVICE_DETACHED->extra(i)?.let{remove(it)};ACTION_USB_PERMISSION->extra(i)?.let{if(i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED,false))openAndRegister(it)}}}}
+    private val receiver=object:BroadcastReceiver(){override fun onReceive(c:Context,i:Intent){when(i.action){UsbManager.ACTION_USB_DEVICE_ATTACHED->extra(i)?.let{requestOrOpen(it)};UsbManager.ACTION_USB_DEVICE_DETACHED->extra(i)?.let{remove(it);if(askingPermissionFor==it.deviceId)permissionAnswered()};ACTION_USB_PERMISSION->{extra(i)?.let{if(i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED,false))openAndRegister(it)};permissionAnswered()}}}}
     private fun extra(i:Intent):UsbDevice?=if(Build.VERSION.SDK_INT>=33)i.getParcelableExtra(UsbManager.EXTRA_DEVICE,UsbDevice::class.java) else @Suppress("DEPRECATION") i.getParcelableExtra(UsbManager.EXTRA_DEVICE)
 
-    fun initialize(){if(!receiverRegistered){val f=IntentFilter().apply{addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);addAction(ACTION_USB_PERMISSION)};context.registerReceiver(receiver,f,Context.RECEIVER_NOT_EXPORTED);receiverRegistered=true};usb.deviceList.values.forEach(::requestOrOpen)}
+    fun initialize(){if(!receiverRegistered){val f=IntentFilter().apply{addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);addAction(ACTION_USB_PERMISSION)};context.registerReceiver(receiver,f,Context.RECEIVER_NOT_EXPORTED);receiverRegistered=true};rescan()}
+    /** Looks at every connected device again, and asks for any missing USB permissions (one dialog at a time). */
+    fun rescan(){usb.deviceList.values.forEach(::requestOrOpen)}
     @Synchronized fun shutdown(){sessions.values.forEach{runCatching{it.stop()}};sessions.clear();sessionSignatures.clear();connections.values.forEach{runCatching{it.close()}};connections.clear();_devices.value=emptyList();updateBudget();if(receiverRegistered){runCatching{context.unregisterReceiver(receiver)};receiverRegistered=false}}
 
-    private fun requestOrOpen(device:UsbDevice){if(!isInteresting(device))return;if(usb.hasPermission(device))openAndRegister(device)else{val pi=PendingIntent.getBroadcast(context,device.deviceId,Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE);usb.requestPermission(device,pi)}}
+    // Android shows one USB permission dialog at a time and drops requests made while one is open, which is why
+    // only one of several cameras used to appear. Requests are queued and the next is asked after each answer.
+    private val permissionQueue=ArrayDeque<UsbDevice>()
+    @Volatile private var askingPermissionFor:Int?=null
+    private fun requestOrOpen(device:UsbDevice){if(!isInteresting(device))return;if(usb.hasPermission(device))openAndRegister(device)else synchronized(permissionQueue){if(askingPermissionFor!=device.deviceId&&permissionQueue.none{it.deviceId==device.deviceId})permissionQueue.addLast(device);askNextPermission()}}
+    private fun askNextPermission(){synchronized(permissionQueue){if(askingPermissionFor!=null)return;val next=permissionQueue.removeFirstOrNull()?:return;if(usb.deviceList.values.none{it.deviceId==next.deviceId}||usb.hasPermission(next)){if(usb.hasPermission(next))openAndRegister(next);askNextPermission();return};askingPermissionFor=next.deviceId;val pi=PendingIntent.getBroadcast(context,next.deviceId,Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE);usb.requestPermission(next,pi)}}
+    private fun permissionAnswered(){synchronized(permissionQueue){askingPermissionFor=null};askNextPermission()}
     private fun openAndRegister(device:UsbDevice){if(_devices.value.any{it.deviceId==device.deviceId})return;val c=usb.openDevice(device)?:return;val type=classify(device);if(type==UsbDeviceType.UNKNOWN){c.close();return};connections[device.deviceId]=c;val formats=if(type==UsbDeviceType.AUDIO_INPUT)emptyList() else UvcCaptureSession.listFormats(device,c).map{"${it.width}x${it.height}@${it.fps}:${it.codec}"}.distinct();val info=UsbDeviceInfo(device.deviceId,device.deviceName,displayName(device,type),device.vendorId,device.productId,device.manufacturerName,device.productName,runCatching{device.serialNumber}.getOrNull(),type,detectSpeed(c),0,true,false,"","",formats,0,type==UsbDeviceType.COMPOSITE_AV||type==UsbDeviceType.AUDIO_INPUT);_devices.value=_devices.value+info;updateBudget();Timber.i("USB registered: ${info.displayName}; formats=${formats.size}")}
     @Synchronized private fun remove(device:UsbDevice){sessions.remove(device.deviceId)?.stop();sessionSignatures.remove(device.deviceId);connections.remove(device.deviceId)?.close();_devices.value=_devices.value.filterNot{it.deviceId==device.deviceId};updateBudget()}
 
@@ -76,7 +85,8 @@ class NativeUsbManager @Inject constructor(@ApplicationContext private val conte
         if(sessions[deviceId]!=null&&sessionSignatures[deviceId]==signature)return true
         val bw=estimateBandwidth(width,height,fps,format)
         val replacingBandwidth=if(sessions[deviceId]!=null)info.estimatedBandwidthMbps else 0
-        if(bw>_budget.value.availableBandwidthMbps+replacingBandwidth){lastErrors[deviceId]="Not enough USB bandwidth for ${width}x${height}@${fps} $format (needs ~$bw Mbps). Pick a smaller format or disconnect another USB camera.";return false}
+        // No bandwidth pre-check: the camera and Android negotiate the USB bandwidth during UVC start, and a
+        // format that truly does not fit fails there with the real reason.
         return runCatching{
             sessions.remove(deviceId)?.stop()
             val s=UvcCaptureSession(usb.deviceList.values.first{it.deviceId==deviceId},conn,sourceId,width,height,fps,format,sourceConfigJson)

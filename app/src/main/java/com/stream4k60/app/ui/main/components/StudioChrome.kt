@@ -52,13 +52,20 @@ import java.util.Locale
 
 /** An OBS-style dock: bold title bar over its content. */
 @Composable
-fun Dock(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun Dock(title: String, modifier: Modifier = Modifier, contentScale: Float = 1f, content: @Composable ColumnScope.() -> Unit) {
     Column(modifier.border(1.dp, ObsBorder).background(MaterialTheme.colorScheme.surface)) {
         Row(
             Modifier.fillMaxWidth().height(26.dp).background(ObsDockTitle).padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) { Text(title, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
-        content()
+        // Resizing a dock scales what is inside it (text, buttons, faders), not just the empty space around them.
+        val d = androidx.compose.ui.platform.LocalDensity.current
+        val scale = contentScale.coerceIn(0.75f, 1.6f)
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(d.density * scale, d.fontScale)
+        ) {
+            Column(Modifier.fillMaxSize()) { content() }
+        }
     }
 }
 

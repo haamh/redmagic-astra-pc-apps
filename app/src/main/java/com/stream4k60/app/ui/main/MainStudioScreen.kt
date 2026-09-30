@@ -41,7 +41,7 @@ fun MainStudioScreen(
     onOpenProfiles:()->Unit,
     vm:MainStudioViewModel=hiltViewModel()
 ){
-    val streaming by vm.streamState.collectAsState();val streamStats by vm.streamStats.collectAsState();val streamError by vm.streamError.collectAsState();val recording by vm.recordState.collectAsState();val studio by vm.isStudioModeEnabled.collectAsState();val selectedTransition by vm.selectedTransition.collectAsState();val scenes by vm.scenes.collectAsState();val sceneCollections by vm.sceneCollections.collectAsState();val activeCollectionId by vm.activeSceneCollectionId.collectAsState();val active by vm.activeScene.collectAsState();val sources by vm.sources.collectAsState();val sourceErrors by SourceRuntimeErrors.errors.collectAsState();val videoConfig by vm.videoConfig.collectAsState();val importedRtmpEndpoint by vm.importedRtmpEndpoint.collectAsState();var selectedSourceId by remember{mutableStateOf<String?>(null)};val canvasFocusRequester=remember{FocusRequester()};var search by remember{mutableStateOf(false)};var yt by remember{mutableStateOf(false)};var customRtmp by remember{mutableStateOf(false)};var addSource by remember{mutableStateOf(false)};var editingSource by remember{mutableStateOf<SourceItem?>(null)};var filteringSource by remember{mutableStateOf<SourceItem?>(null)};var broadcastTitle by rememberSaveable{mutableStateOf<String?>(null)}
+    val streaming by vm.streamState.collectAsState();val streamStats by vm.streamStats.collectAsState();val streamError by vm.streamError.collectAsState();val recording by vm.recordState.collectAsState();val studio by vm.isStudioModeEnabled.collectAsState();val selectedTransition by vm.selectedTransition.collectAsState();val scenes by vm.scenes.collectAsState();val sceneCollections by vm.sceneCollections.collectAsState();val activeCollectionId by vm.activeSceneCollectionId.collectAsState();val active by vm.activeScene.collectAsState();val sources by vm.sources.collectAsState();val sourceErrors by SourceRuntimeErrors.errors.collectAsState();val videoConfig by vm.videoConfig.collectAsState();val importedRtmpEndpoint by vm.importedRtmpEndpoint.collectAsState();var selectedSourceId by remember{mutableStateOf<String?>(null)};val canvasFocusRequester=remember{FocusRequester()};var search by remember{mutableStateOf(false)};var yt by remember{mutableStateOf(false)};var customRtmp by remember{mutableStateOf(false)};var addSource by remember{mutableStateOf(false)};var editingSource by remember{mutableStateOf<SourceItem?>(null)};var filteringSource by remember{mutableStateOf<SourceItem?>(null)};var audioManage by remember{mutableStateOf<Pair<String,String>?>(null)};var broadcastTitle by rememberSaveable{mutableStateOf<String?>(null)}
     LaunchedEffect(active?.id) { selectedSourceId = null }
     val general by vm.generalSettings.collectAsState()
     var confirmStop by remember { mutableStateOf<String?>(null) }
@@ -224,16 +224,21 @@ fun MainStudioScreen(
             val bottomHeight = dock.bottomHeight.orDefault(m.bottomHeight)
             val transitionsWidth = dock.transitionsWidth.orDefault(m.transitionsWidth)
             val controlsWidth = dock.controlsWidth.orDefault(m.controlsWidth)
+            // Dock contents grow and shrink with the dock (relative to its default size).
+            val leftScale = leftWidth / m.leftWidth
+            val bottomScale = bottomHeight / m.bottomHeight
+            val transitionsScale = minOf(bottomScale, transitionsWidth / m.transitionsWidth)
+            val controlsScale = minOf(bottomScale, controlsWidth / m.controlsWidth)
             Row(Modifier.fillMaxSize()) {
                 Column(Modifier.width(leftWidth).fillMaxHeight()) {
                     val scenesFraction = dock.scenesFraction.coerceIn(0.15f, 0.85f)
-                    Dock("Scenes", Modifier.weight(scenesFraction).fillMaxWidth()) {
+                    Dock("Scenes", Modifier.weight(scenesFraction).fillMaxWidth(), leftScale) {
                         ScenePanel(scenes,active?.id,{vm.setActiveScene(it)},{vm.addScene("Scene ${scenes.size+1}")},{vm.removeScene()},Modifier.fillMaxSize(),showHeader=false)
                     }
                     DockSplitter(false, { d -> dock.scenesFraction = (dock.scenesFraction + d / areaHeight).coerceIn(0.15f, 0.85f) }, dock::save) {
                         dock.scenesFraction = 0.5f; dock.save()
                     }
-                    Dock("Sources", Modifier.weight(1f - scenesFraction).fillMaxWidth()) {
+                    Dock("Sources", Modifier.weight(1f - scenesFraction).fillMaxWidth(), leftScale) {
                         SourcePanel(
                             sources = sources,
                             sourceErrors = sourceErrors,
@@ -310,22 +315,22 @@ fun MainStudioScreen(
                         dock.bottomHeight = 0f; dock.save()
                     }
                     Row(Modifier.fillMaxWidth().height(bottomHeight)) {
-                        Dock("Audio Mixer", Modifier.weight(1f).fillMaxHeight()) {
-                            AudioMixerPanel(audioItems, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.fillMaxSize(), showHeader = false, onFilters = { filteringSource = it },
-                                // Desktop Audio / Mic/Aux are configured in Settings → Audio, like OBS's global devices.
-                                onProperties = { src -> if (src.id.startsWith("global:")) onOpenSettings("Audio") else editable(src.id)?.let { editingSource = it } },
-                                onRename = { src, name -> vm.renameSource(src.id, name) })
+                        Dock("Audio Mixer", Modifier.weight(1f).fillMaxHeight(), bottomScale) {
+                            AudioMixerPanel(audioItems, { src, cfg -> vm.updateSourceConfig(src.id, cfg) }, vm::audioPeak, Modifier.fillMaxSize(), showHeader = false, onFilters = { audioManage = "filters" to it.id },
+                                onProperties = { audioManage = "properties" to it.id },
+                                onRename = { src, name -> vm.renameSource(src.id, name) },
+                                onManageAll = { mode -> audioManage = mode to (audioManage?.second ?: audioItems.firstOrNull(::isAudioSource)?.id.orEmpty()) })
                         }
                         DockSplitter(true, { d -> dock.transitionsWidth = (transitionsWidth.value - d).coerceIn(120f, areaWidth * 0.35f) }, dock::save) {
                             dock.transitionsWidth = 0f; dock.save()
                         }
-                        Dock("Scene Transitions", Modifier.width(transitionsWidth).fillMaxHeight()) {
+                        Dock("Scene Transitions", Modifier.width(transitionsWidth).fillMaxHeight(), transitionsScale) {
                             TransitionsDockContent(selectedTransition, vm::selectTransition, studio) { active?.id?.let { vm.setActiveScene(it) } }
                         }
                         DockSplitter(true, { d -> dock.controlsWidth = (controlsWidth.value - d).coerceIn(140f, areaWidth * 0.35f) }, dock::save) {
                             dock.controlsWidth = 0f; dock.save()
                         }
-                        Dock("Controls", Modifier.width(controlsWidth).fillMaxHeight()) {
+                        Dock("Controls", Modifier.width(controlsWidth).fillMaxHeight(), controlsScale) {
                             ControlsDockContent(
                                 isStreaming = (streaming == StudioStreamState.LIVE || streaming == StudioStreamState.RECONNECTING),
                                 isStudioMode = studio,
@@ -402,6 +407,28 @@ fun MainStudioScreen(
     // New sources open their properties straight away so the device/file/URL can be chosen, like OBS.
     if(addSource)SourceTypePicker(onAdd={type->addSource=false;if(type=="SCENE")pickingNestedScene=true else vm.addSource(type){created->selectedSourceId=created.id;editingSource=created}},onDismiss={addSource=false})
     if(pickingNestedScene)NestedScenePicker(vm,onDismiss={pickingNestedScene=false})
+    // One window for every audio source: tabs per source, switch between Properties and Filters.
+    audioManage?.let { (mode, wantedId) ->
+        val list = audioItems.filter(::isAudioSource)
+        val src = list.firstOrNull { it.id == wantedId } ?: list.firstOrNull()
+        if (src == null) { audioManage = null } else key(src.id, mode) {
+            val tabs: @Composable () -> Unit = { AudioSourceTabs(list, src.id, mode, { audioManage = mode to it }, { audioManage = it to src.id }) }
+            if (mode == "filters") FilterEditorScreen(
+                source = src,
+                onApply = { config -> vm.updateSourceConfig(src.id, config); audioManage = null },
+                onCancel = { audioManage = null },
+                header = tabs
+            ) else SourcePropertiesDialog(
+                source = src,
+                usbManager = usb,
+                onSave = { vm.updateSourceConfig(it.id, it.configJson); audioManage = null },
+                runtimeError = sourceErrors[src.id],
+                peakProvider = vm::audioPeak,
+                header = tabs,
+                onDismiss = { audioManage = null }
+            )
+        }
+    }
     filteringSource?.let { source ->
         FilterEditorScreen(
             source = source,

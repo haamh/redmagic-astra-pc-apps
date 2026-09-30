@@ -103,7 +103,8 @@ private val VIDEO_DESCRIPTIONS = mapOf(
 fun FilterEditorScreen(
     source: SourceItem,
     onApply: (String) -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    header: (@Composable () -> Unit)? = null
 ) {
     val supportsVideo = source.type.uppercase() in VideoFilterChain.VIDEO_SOURCE_TYPES
     val supportsAudio = source.type.uppercase() in AudioFilterChain.AUDIO_SOURCE_TYPES
@@ -131,6 +132,7 @@ fun FilterEditorScreen(
         title = { ClosableTitle("Filters · ${source.name}", cancel) },
         text = {
             Column(Modifier.heightIn(max = 600.dp)) {
+                header?.invoke()
                 if (supportsVideo && supportsAudio) {
                     TabRow(selectedTabIndex = tab) {
                         Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Video") })

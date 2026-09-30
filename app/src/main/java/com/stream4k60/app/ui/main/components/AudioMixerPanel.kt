@@ -65,7 +65,9 @@ fun AudioMixerPanel(
     showHeader: Boolean = true,
     onFilters: ((SourceItem) -> Unit)? = null,
     onProperties: ((SourceItem) -> Unit)? = null,
-    onRename: ((SourceItem, String) -> Unit)? = null
+    onRename: ((SourceItem, String) -> Unit)? = null,
+    /** Opens the all-audio-sources window on "properties" or "filters". */
+    onManageAll: ((String) -> Unit)? = null
 ) {
     val prefs = LocalContext.current.getSharedPreferences("studio_layout", Context.MODE_PRIVATE)
     var vertical by remember { mutableStateOf(prefs.getBoolean("mixer_vertical", true)) }
@@ -92,7 +94,7 @@ fun AudioMixerPanel(
                 vertical -> Row(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
                     shown.forEach { src ->
                         Channel(src, true, onSourceConfigChanged, peakProvider, onFilters, onProperties, { renaming = it }, { advanced = true }, unhideAll,
-                            Modifier.width(72.dp).fillMaxHeight())
+                            Modifier.width(84.dp).fillMaxHeight())
                     }
                 }
                 else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -108,6 +110,14 @@ fun AudioMixerPanel(
             Text("$hiddenCount hidden", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.clickable(enabled = hiddenCount > 0) { unhideAll() }.padding(4.dp))
             Spacer(Modifier.weight(1f))
+            if (onManageAll != null) {
+                TextButton(onClick = { onManageAll("properties") }, enabled = audioSources.isNotEmpty(), contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Icon(Icons.Default.Settings, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("Properties", fontSize = 12.sp)
+                }
+                TextButton(onClick = { onManageAll("filters") }, enabled = audioSources.isNotEmpty(), contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Icon(Icons.Default.FilterAlt, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("Filters", fontSize = 12.sp)
+                }
+            }
             IconButton(onClick = { setVertical(!vertical) }, modifier = Modifier.size(30.dp)) {
                 Icon(if (vertical) Icons.Default.ViewStream else Icons.Default.ViewColumn, "Switch mixer layout", Modifier.size(17.dp))
             }
@@ -141,7 +151,7 @@ fun AudioMixerPanel(
     }
 }
 
-private fun isAudioSource(it: SourceItem) =
+internal fun isAudioSource(it: SourceItem) =
     it.type.equals("AUDIO_INPUT", true) || it.type.equals("PLAYBACK_AUDIO", true) || it.type.equals("MEDIA", true) ||
         (it.type.equals("USB_CAPTURE", true) && runCatching {
             val root = JSONObject(it.configJson); (root.optJSONObject("settings") ?: root).optInt("audioDeviceId", -1) >= 0
@@ -259,7 +269,7 @@ private fun Channel(
             Text(dbText(state.volume), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(Modifier.weight(1f).padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 Fader(state.volume, state.locked, true, { set(state.copy(volume = it)) }, Modifier.width(18.dp).fillMaxHeight())
-                Meter(level, state.muted, true, Modifier.width(34.dp).fillMaxHeight())
+                Meter(level, state.muted, true, Modifier.width(46.dp).fillMaxHeight())
             }
             Row { buttons() }
         }
@@ -319,11 +329,12 @@ private fun Meter(level: Pair<Float, Float>, muted: Boolean, vertical: Boolean, 
             }
         }
         if (vertical) {
-            // dB scale beside the meter, 0 at the top.
-            BoxWithConstraints(Modifier.width(16.dp).fillMaxHeight()) {
-                (0 downTo -60 step 6).forEach { t ->
-                    Text("$t", fontSize = 7.sp, lineHeight = 7.sp, color = labelColor,
-                        modifier = Modifier.offset(y = maxHeight * (-t / 60f) - 4.dp).padding(start = 1.dp))
+            // dB scale beside the meter, 0 at the top. Fewer labels when the dock is short, so they never overlap.
+            BoxWithConstraints(Modifier.width(20.dp).fillMaxHeight()) {
+                val step = listOf(6, 10, 20, 30, 60).firstOrNull { maxHeight * (it / 60f) >= 12.dp } ?: 60
+                (0 downTo -60 step step).forEach { t ->
+                    Text("$t", fontSize = 8.sp, lineHeight = 8.sp, color = labelColor, softWrap = false, maxLines = 1,
+                        modifier = Modifier.offset(y = (maxHeight * (-t / 60f) - 5.dp).coerceIn(0.dp, (maxHeight - 9.dp).coerceAtLeast(0.dp))).padding(start = 2.dp))
                 }
             }
         }

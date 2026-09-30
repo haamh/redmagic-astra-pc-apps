@@ -27,12 +27,18 @@ adb shell cat /sdcard/Android/data/com.stream4k60.app/files/native-crash.txt
 - The APK is ~76 MB. Build outputs are not committed.
 
 ### Open problems (do these next)
-1. **Insta360 stays black** with every format over direct USB. USB camera sources now have a **Driver** option (`engine/UsbCameraRouting.kt`): Automatic uses Android's Camera2 driver when the camera is listed as `LENS_FACING_EXTERNAL`, otherwise direct UVC. Waiting on the user to say (a) whether Properties reports Android listing a USB camera and (b) the full error text (now visible in Properties / `source-errors.txt`). If Android does not list it, debug the UVC path (`engine/UvcCaptureSession.kt`, `cpp/usb/uvc_iso_stream.cpp`, `uvc_bulk_stream.cpp`) using that error.
+1. **Insta360 (direct USB).** Android does NOT list it in the camera service on the Astra, so only direct UVC is possible. The last device error was our own bandwidth pre-check wrongly refusing 1080p60 MJPEG: it estimated 4 bits/pixel, and the budget used the camera's USB 2.0 descriptor speed. **That pre-check has been removed entirely** (`NativeUsbManager.startCapture`). Whether frames now arrive is untested; the next error, if any, will be the real UVC negotiation or transfer failure (see Properties / `source-errors.txt`; code in `engine/UvcCaptureSession.kt`, `cpp/usb/uvc_iso_stream.cpp`, `uvc_bulk_stream.cpp`).
+   - **Missing webcams:** USB permission requests were fired for all devices at once and Android dropped all but one. They are now queued one at a time, and USB source Properties has a **Rescan USB devices** button.
 2. **Audio input error** (the user's audio input source): full message not yet received. Only the UVC streaming interface is claimed, so the camera path should not steal the Insta360 mic. Errors come from `MainStudioViewModel` `syncAudioGraph`/`audioRoutes`.
 3. The mixer's two meter bars show the same level: the engine reports one peak per source. Mono and the audio track checkboxes are not implemented.
 4. YouTube: the app can pick existing scheduled broadcasts but cannot create one (OBS "Manage Broadcast → Create"). The access token lives in memory only; it is restored silently when the picker opens.
 
 ### What exists now (this pass)
+- **Latest round:**
+  - Every dock scales its contents with its size (`Dock(contentScale)`, from dragged size ÷ default size, clamped 0.75–1.6).
+  - The mixer meter's dB labels adapt to the available height, and channels are 84 dp wide.
+  - The mixer footer has **Properties** and **Filters** buttons. They and the channel menus open one window with a tab per audio source and a Properties/Filters switch (`AudioSourceTabs.kt`, a `header` slot on `SourcePropertiesDialog` and `FilterEditorScreen`).
+  - Mic/Aux Properties can pick its device, which is saved as `AudioSettings.micDeviceId`; "Default" = Android's current input.
 - **Layout (OBS):** Scenes/Sources docks on the left, preview, source toolbar, Audio Mixer / Scene Transitions / Controls docks, and a status bar. Every dock split is draggable (`ui/main/components/DockLayout.kt`, saved in SharedPreferences `studio_layout`; double-tap a bar to reset it).
 - **Preview:** `PreviewViewport.kt` offers Scale to window / Canvas / Output, plus zoom and pan:
   - Ctrl+wheel or a pinch on empty space zooms.

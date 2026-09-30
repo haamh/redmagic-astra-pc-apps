@@ -343,8 +343,12 @@ private fun transitionCode(name:String):Int=when(name){"Cut"->0;else->1}
    viewModelScope.launch{
     val a=audioSettingsState.value
     // The device and push-to-talk mute are derived, not stored.
-    val clean=runCatching{org.json.JSONObject(config).apply{remove("deviceId");if(id==GlobalAudio.MIC&&(a.pushToTalk||a.pushToMute))remove("muted")}}.getOrNull()?.toString()?:config
-    settingsRepository.saveAudioSettings(if(id==GlobalAudio.DESKTOP)a.copy(desktopConfig=clean)else a.copy(micConfig=clean))
+    val json=runCatching{org.json.JSONObject(config)}.getOrNull()
+    // Picking a device in Mic/Aux properties is the same as Settings → Audio → Mic/Aux device.
+    val pickedDevice=json?.let{(it.optJSONObject("settings")?:it).optInt("deviceId",Int.MIN_VALUE)}?.takeIf{it!=Int.MIN_VALUE}
+    val clean=json?.apply{remove("deviceId");optJSONObject("settings")?.remove("deviceId");if(id==GlobalAudio.MIC&&(a.pushToTalk||a.pushToMute))remove("muted")}?.toString()?:config
+    val micDevice=if(id==GlobalAudio.MIC&&pickedDevice!=null)(if(pickedDevice<0)AudioSettings.MIC_DEFAULT else pickedDevice)else a.micDeviceId
+    settingsRepository.saveAudioSettings(if(id==GlobalAudio.DESKTOP)a.copy(desktopConfig=clean)else a.copy(micConfig=clean,micDeviceId=micDevice))
    }
    return
   }
