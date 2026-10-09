@@ -65,7 +65,11 @@ class UvcCaptureSession(
         check(!running.get()) { "UVC session already running" }
         val formats = parseFormats(connection.rawDescriptors)
         check(formats.isNotEmpty()) { "The camera did not advertise any video formats" }
-        val selected = chooseFormat(formats, width, height, fps, formatName)
+        val advertised = chooseFormat(formats, width, height, fps, formatName)
+        // A custom frame rate on a listed resolution/format is requested exactly; the camera answers the UVC probe
+        // with the closest rate it can do. Resolutions and formats must come from the device's own list.
+        val selected = if (advertised.width == width && advertised.height == height && advertised.codec.equals(formatName, true) && advertised.fps != fps && fps > 0)
+            advertised.copy(fps = fps) else advertised
 
         val choice = chooseEndpoint(selected)
             ?: error("UVC device has no usable real-time bulk or isochronous streaming endpoint")

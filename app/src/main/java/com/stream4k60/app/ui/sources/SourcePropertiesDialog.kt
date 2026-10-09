@@ -406,8 +406,11 @@ fun SourcePropertiesDialog(
                         TextButton(onClick = { usbManager.rescan() }) { Text("Rescan USB devices") }
                         if (selected == null) Text("Connect a UVC camera or capture card and allow each USB permission prompt (one appears per device), then select it here. Missing a camera? Tap Rescan.", style = MaterialTheme.typography.bodySmall)
                         else {
+                            UsbModePickers(selected.supportedFormats, int("width", 1920), int("height", 1080), int("fps", 60), str("format", "MJPEG"), ::set)
+                            if (selected.isCapturing && selected.currentFormat.isNotBlank() && selected.currentFormat != usbFormatLabel(config))
+                                Text("Running now: ${selected.currentFormat} (the closest mode the device accepted).", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                             ExposedDropdownMenuBox(expanded = formatMenuExpanded, onExpandedChange = { formatMenuExpanded = !formatMenuExpanded }) {
-                                OutlinedTextField(value = usbFormatLabel(config), onValueChange = {}, readOnly = true, label = { Text("Capture format") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(formatMenuExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
+                                OutlinedTextField(value = usbFormatLabel(config), onValueChange = {}, readOnly = true, label = { Text("Quick pick: modes this device lists") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(formatMenuExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
                                 ExposedDropdownMenu(expanded = formatMenuExpanded, onDismissRequest = { formatMenuExpanded = false }) {
                                     selected.supportedFormats.forEach { format -> DropdownMenuItem(text = { Text(format) }, onClick = { applyUsbFormat(format, ::set); formatMenuExpanded = false }) }
                                 }
@@ -717,7 +720,9 @@ private fun validateSourceConfig(
         when {
             device == null -> "Select a connected USB video device that has Android USB permission."
             device.supportedFormats.isEmpty() -> "This USB device did not advertise a usable UVC video format."
-            usbFormatLabel(settings) !in device.supportedFormats -> "Choose one of the formats advertised by this USB device."
+            settings.optInt("width", 0) !in 160..7680 || settings.optInt("height", 0) !in 120..4320 -> "Enter a resolution between 160×120 and 7680×4320."
+            settings.optInt("fps", 0) !in 1..480 -> "Enter a frame rate between 1 and 480."
+            settings.optString("format").isBlank() -> "Choose a video format."
             else -> null
         }
     }
@@ -741,4 +746,78 @@ private fun canReadSourceUri(context: Context, path: String, allowNetwork: Boole
         null, "" -> java.io.File(path).isFile
         else -> false
     }
+}
+
+private data class UsbMode(val width: Int, val height: Int, val fps: Int, val codec: String)
+
+/**
+ * Separate Resolution, Frame rate and Format pickers for USB video devices. Each lists what the device advertises
+ * first, then common values (marked "not listed by device"), then Custom… for any value.
+ */
+@Composable
+private fun UsbModePickers(advertised: List<String>, width: Int, height: Int, fps: Int, format: String, set: (String, Any?) -> Unit) {
+    val modes = advertised.mapNotNull { Regex("(\\d+)x(\\d+)@(\\d+):(.+)").matchEntire(it)?.groupValues?.let { g -> UsbMode(g[1].toInt(), g[2].toInt(), g[3].toInt(), g[4].uppercase()) } }
+    val codec = format.uppercase()
+    fun tag(listed: Boolean) = if (listed) "" else "  (not listed by device)"
+    var customRes by remember { mutableStateOf(false) }
+    var customFps by remember { mutableStateOf(false) }
+    var customFormat by remember { mutableStateOf(false) }
+
+    val resolutions = (modes.map { it.width to it.height } + listOf(7680 to 4320, 3840 to 2160, 2560 to 1440, 1920 to 1080, 1280 to 720))
+        .distinct().sortedByDescending { it.first * it.second }
+    ChoiceField("Resolution", "$width×$height",
+        resolutions.map { (w, h) -> "$w×$h" + tag(modes.any { it.width == w && it.height == h }) to { set("width", w); set("height", h); customRes = false } }
+    ) { customRes = true }
+    if (customRes) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        IntField("Width", width, 160..7680, Modifier.weight(1f)) { set("width", it) }
+        IntField("Height", height, 120..4320, Modifier.weight(1f)) { set("height", it) }
+    }
+
+    val listedFps = modes.filter { it.width == width && it.height == height && it.codec == codec }.map { it.fps }
+    ChoiceField("Frame rate", "$fps FPS",
+        (listedFps + listOf(240, 144, 120, 60, 50, 30, 25, 24)).distinct().sortedDescending()
+            .map { f -> "$f FPS" + tag(f in listedFps) to { set("fps", f); customFps = false } }
+    ) { customFps = true }
+    if (customFps) IntField("Frame rate (FPS)", fps, 1..480, Modifier.fillMaxWidth()) { set("fps", it) }
+
+    val listedCodecs = modes.filter { it.width == width && it.height == height }.map { it.codec }.toSet()
+    ChoiceField("Format", codec,
+        (modes.map { it.codec } + listOf("MJPEG", "H264", "HEVC", "NV12", "YUYV", "UYVY", "P010")).distinct()
+            .map { c -> c + tag(c in listedCodecs) to { set("format", c); customFormat = false } }
+    ) { customFormat = true }
+    if (customFormat) {
+        var text by remember { mutableStateOf(codec) }
+        OutlinedTextField(text, { t -> text = t.uppercase().take(8); if (text.isNotBlank()) set("format", text) }, label = { Text("Format (FourCC)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    val exact = modes.any { it.width == width && it.height == height && it.codec == codec && it.fps == fps }
+    if (!exact) Text(
+        if (modes.any { it.width == width && it.height == height && it.codec == codec })
+            "This frame rate isn't in the device's list for $width×$height $codec; it will be requested anyway and the device uses the closest rate it supports."
+        else "The device doesn't list $width×$height $codec; the closest mode it offers will be used and shown below once running.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChoiceField(label: String, value: String, options: List<Pair<String, () -> Unit>>, onCustom: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = !open }) {
+        OutlinedTextField(value, {}, readOnly = true, label = { Text(label) }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(open) }, modifier = Modifier.menuAnchor().fillMaxWidth())
+        ExposedDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEach { (text, pick) -> DropdownMenuItem(text = { Text(text) }, onClick = { pick(); open = false }) }
+            DropdownMenuItem(text = { Text("Custom…") }, onClick = { onCustom(); open = false })
+        }
+    }
+}
+
+@Composable
+private fun IntField(label: String, value: Int, range: IntRange, modifier: Modifier, onValid: (Int) -> Unit) {
+    var text by remember { mutableStateOf(value.toString()) }
+    OutlinedTextField(
+        text, { t -> text = t.filter(Char::isDigit).take(5); text.toIntOrNull()?.takeIf { it in range }?.let(onValid) },
+        label = { Text(label) }, singleLine = true, isError = text.toIntOrNull()?.let { it !in range } ?: true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+        modifier = modifier
+    )
 }

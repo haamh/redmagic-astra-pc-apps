@@ -116,7 +116,7 @@ class NativeUsbManager @Inject constructor(@ApplicationContext private val conte
             sessions[deviceId]=s
             sessionSignatures[deviceId]=signature
             lastErrors.remove(deviceId)
-            _devices.value=_devices.value.map{if(it.deviceId==deviceId)it.copy(isCapturing=true,currentFormat="${width}x${height}@${fps}:$format",transport=s.transport(),estimatedBandwidthMbps=bw)else it};updateBudget();true
+            _devices.value=_devices.value.map{if(it.deviceId==deviceId)it.copy(isCapturing=true,currentFormat=s.currentFormat()?.let{f->"${f.width}x${f.height}@${f.fps}:${f.codec}"}?:"${width}x${height}@${fps}:$format",transport=s.transport(),estimatedBandwidthMbps=bw)else it};updateBudget();true
         }.onFailure{Timber.e(it,"UVC capture start failed for $deviceId");lastErrors[deviceId]=it.message?:it.javaClass.simpleName;sessions.remove(deviceId)?.let{runCatching{it.stop()}};sessionSignatures.remove(deviceId);_devices.value=_devices.value.map{if(it.deviceId==deviceId)it.copy(isCapturing=false,currentFormat="",transport="",estimatedBandwidthMbps=0)else it};updateBudget()}.getOrDefault(false)
     }
 

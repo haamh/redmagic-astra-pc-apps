@@ -45,6 +45,11 @@ adb shell cat /sdcard/Android/data/com.stream4k60.app/files/native-crash.txt
      - `detectSpeed` now checks for SuperSpeed endpoint-companion descriptors (0x30), not just bcdUSB.
      - Properties explains a USB 2.0 link.
      - Every device's link, formats and raw descriptors are written to `files/usb-devices.txt`. Ask the user for it (`adb shell cat /sdcard/Android/data/com.stream4k60.app/files/usb-devices.txt`).
+   - **USB mode pickers.** The user corrected the USB 2 theory: the Elgato 4K S lists 4K30 NV12, so it is on USB 3. USB video Properties now has separate Resolution / Frame rate / Format dropdowns. Each shows the device's listed values first, then common values marked "not listed by device", then Custom… (`UsbModePickers` in `SourcePropertiesDialog.kt`).
+     - The old full-mode list remains as "Quick pick".
+     - A custom FPS on a listed resolution/format is sent exactly in the UVC probe, and the device answers with the nearest rate. A non-listed resolution or format falls back to the closest listed mode.
+     - "Running now" shows the actual mode (`UsbDeviceInfo.currentFormat` now comes from the session).
+     - Whether the 4K S lists 4K60 at all is still unknown: get `usb-devices.txt` from the user.
    - **Missing webcams:** USB permission requests were fired for all devices at once and Android dropped all but one. They are now queued one at a time, and USB source Properties has a **Rescan USB devices** button.
 2. **Audio input error** (the user's audio input source): full message not yet received. Only the UVC streaming interface is claimed, so the camera path should not steal the Insta360 mic. Errors come from `MainStudioViewModel` `syncAudioGraph`/`audioRoutes`.
 3. The mixer's two meter bars show the same level: the engine reports one peak per source. Mono and the audio track checkboxes are not implemented.
