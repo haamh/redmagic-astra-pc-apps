@@ -67,13 +67,35 @@ class NativeUsbManager @Inject constructor(@ApplicationContext private val conte
     private fun requestOrOpen(device:UsbDevice){if(!isInteresting(device))return;if(usb.hasPermission(device))openAndRegister(device)else synchronized(permissionQueue){if(askingPermissionFor!=device.deviceId&&permissionQueue.none{it.deviceId==device.deviceId})permissionQueue.addLast(device);askNextPermission()}}
     private fun askNextPermission(){synchronized(permissionQueue){if(askingPermissionFor!=null)return;val next=permissionQueue.removeFirstOrNull()?:return;if(usb.deviceList.values.none{it.deviceId==next.deviceId}||usb.hasPermission(next)){if(usb.hasPermission(next))openAndRegister(next);askNextPermission();return};askingPermissionFor=next.deviceId;val pi=PendingIntent.getBroadcast(context,next.deviceId,Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE);usb.requestPermission(next,pi)}}
     private fun permissionAnswered(){synchronized(permissionQueue){askingPermissionFor=null};askNextPermission()}
-    private fun openAndRegister(device:UsbDevice){if(_devices.value.any{it.deviceId==device.deviceId})return;val c=usb.openDevice(device)?:return;val type=classify(device);if(type==UsbDeviceType.UNKNOWN){c.close();return};connections[device.deviceId]=c;val formats=if(type==UsbDeviceType.AUDIO_INPUT)emptyList() else UvcCaptureSession.listFormats(device,c).map{"${it.width}x${it.height}@${it.fps}:${it.codec}"}.distinct();val info=UsbDeviceInfo(device.deviceId,device.deviceName,displayName(device,type),device.vendorId,device.productId,device.manufacturerName,device.productName,runCatching{device.serialNumber}.getOrNull(),type,detectSpeed(c),0,true,false,"","",formats,0,type==UsbDeviceType.COMPOSITE_AV||type==UsbDeviceType.AUDIO_INPUT);_devices.value=_devices.value+info;updateBudget();Timber.i("USB registered: ${info.displayName}; formats=${formats.size}")}
+    private fun openAndRegister(device:UsbDevice){if(_devices.value.any{it.deviceId==device.deviceId})return;val c=usb.openDevice(device)?:return;val type=classify(device);if(type==UsbDeviceType.UNKNOWN){c.close();return};connections[device.deviceId]=c;val formats=if(type==UsbDeviceType.AUDIO_INPUT)emptyList() else UvcCaptureSession.listFormats(device,c).map{"${it.width}x${it.height}@${it.fps}:${it.codec}"}.distinct();val info=UsbDeviceInfo(device.deviceId,device.deviceName,displayName(device,type),device.vendorId,device.productId,device.manufacturerName,device.productName,runCatching{device.serialNumber}.getOrNull(),type,detectSpeed(c),0,true,false,"","",formats,0,type==UsbDeviceType.COMPOSITE_AV||type==UsbDeviceType.AUDIO_INPUT);_devices.value=_devices.value+info;updateBudget();writeDeviceReport(device,c,info);Timber.i("USB registered: ${info.displayName}; formats=${formats.size}")}
     @Synchronized private fun remove(device:UsbDevice){sessions.remove(device.deviceId)?.stop();sessionSignatures.remove(device.deviceId);connections.remove(device.deviceId)?.close();_devices.value=_devices.value.filterNot{it.deviceId==device.deviceId};updateBudget()}
 
     private fun isInteresting(d:UsbDevice):Boolean{for(i in 0 until d.interfaceCount){val c=d.getInterface(i).interfaceClass;if(c==14||c==1||c==3)return true};return d.vendorId in CAPTURE_CARD_VENDORS.keys||d.vendorId in AUDIO_INTERFACE_VENDORS.keys}
     private fun classify(d:UsbDevice):UsbDeviceType{var v=false;var a=false;var h=false;for(i in 0 until d.interfaceCount){when(d.getInterface(i).interfaceClass){14->v=true;1->a=true;3->h=true}};return when{v&&a&&d.vendorId in CAPTURE_CARD_VENDORS->UsbDeviceType.COMPOSITE_AV;v&&d.vendorId in CAPTURE_CARD_VENDORS->UsbDeviceType.CAPTURE_CARD;v->UsbDeviceType.VIDEO_CAMERA;a->UsbDeviceType.AUDIO_INPUT;h->UsbDeviceType.HID_CONTROLLER;d.vendorId in AUDIO_INTERFACE_VENDORS->UsbDeviceType.AUDIO_INPUT;else->UsbDeviceType.UNKNOWN}}
     private fun displayName(d:UsbDevice,t:UsbDeviceType)=d.productName?:when(t){UsbDeviceType.CAPTURE_CARD->"USB Capture Card";UsbDeviceType.VIDEO_CAMERA->"USB Camera";UsbDeviceType.COMPOSITE_AV->"USB A/V Capture Device";UsbDeviceType.AUDIO_INPUT->"USB Audio Input";UsbDeviceType.HID_CONTROLLER->"USB Controller";else->d.deviceName}
-    private fun detectSpeed(c:UsbDeviceConnection):UsbSpeed{val r=c.rawDescriptors;if(r.size>=4){val bcd=(r[2].toInt() and 0xFF) or ((r[3].toInt() and 0xFF) shl 8);return when{bcd>=0x0300->UsbSpeed.USB_3_0;bcd>=0x0200->UsbSpeed.USB_2_0;else->UsbSpeed.USB_1_1}};return UsbSpeed.UNKNOWN}
+    /**
+     * The link speed actually in use. SuperSpeed endpoint-companion descriptors (type 0x30) only exist while the
+     * device runs at USB 3, so they are checked first; bcdUSB alone only says what the device claims (a USB 3
+     * capture card stuck on a USB 2 link reports 0x0210 and hides its 4K60 modes).
+     */
+    private fun detectSpeed(c:UsbDeviceConnection):UsbSpeed{
+        val r=c.rawDescriptors?:return UsbSpeed.UNKNOWN
+        var i=0
+        while(i+1<r.size){val len=r[i].toInt() and 0xFF;if(len<2)break;if((r[i+1].toInt() and 0xFF)==0x30)return UsbSpeed.USB_3_0;i+=len}
+        if(r.size>=4){val bcd=(r[2].toInt() and 0xFF) or ((r[3].toInt() and 0xFF) shl 8);return when{bcd>=0x0300->UsbSpeed.USB_3_0;bcd>=0x0200->UsbSpeed.USB_2_0;else->UsbSpeed.USB_1_1}}
+        return UsbSpeed.UNKNOWN
+    }
+
+    /** Writes every video device's link speed, advertised formats and raw descriptors to files/usb-devices.txt. */
+    private val deviceReports=java.util.concurrent.ConcurrentHashMap<Int,String>()
+    private fun writeDeviceReport(device:UsbDevice,c:UsbDeviceConnection,info:UsbDeviceInfo){
+        runCatching{
+            val raw=c.rawDescriptors?.joinToString(" "){"%02X".format(it)}.orEmpty()
+            deviceReports[device.deviceId]="${info.displayName}  VID ${"%04X".format(device.vendorId)} PID ${"%04X".format(device.productId)}\n"+
+                "Link: ${info.usbSpeed.displayName}\nFormats (${info.supportedFormats.size}): ${info.supportedFormats.joinToString(", ")}\nRaw descriptors: $raw\n"
+            context.getExternalFilesDir(null)?.let{java.io.File(it,"usb-devices.txt").writeText(deviceReports.values.joinToString("\n"))}
+        }
+    }
 
     private val lastErrors=java.util.concurrent.ConcurrentHashMap<Int,String>()
     /** Why the last capture start on [deviceId] failed, in words a user can act on. */

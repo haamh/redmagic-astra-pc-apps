@@ -413,6 +413,12 @@ fun SourcePropertiesDialog(
                                 }
                             }
                             Text("USB ${selected.usbSpeed.displayName} · ${selected.supportedFormats.size} advertised formats", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (selected.usbSpeed == com.stream4k60.app.engine.UsbSpeed.USB_2_0) Text(
+                                "Connected at USB 2.0 speed. Capture cards like the Elgato 4K S only offer their 4K/60 modes over a USB 3 link, so they are missing from the list. " +
+                                    "Plug it straight into the tablet, or into a dock port marked USB 3 / 10 Gbps. Many docks fall back to USB 2.0 for data while they also run a display (DisplayPort Alt Mode), " +
+                                    "and USB-C cables without SuperSpeed wires do the same.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
+                            )
                             Text("${selected.manufacturerName.orEmpty()} ${selected.productName.orEmpty()} · VID ${selected.vendorId.toString(16).padStart(4, '0')} / PID ${selected.productId.toString(16).padStart(4, '0')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (str("format", "MJPEG").uppercase() in setOf("MJPEG", "H264", "AVC", "AVC1", "HEVC", "H265")) {
                                 ExposedDropdownMenuBox(expanded = uvcDecoderMenuExpanded, onExpandedChange = { uvcDecoderMenuExpanded = !uvcDecoderMenuExpanded }) {

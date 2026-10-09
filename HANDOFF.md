@@ -41,6 +41,10 @@ adb shell cat /sdcard/Android/data/com.stream4k60.app/files/native-crash.txt
      - A **watchdog** reports every 3 s where the video stops: "no video over USB", "receiving N frames but the decoder produced no picture: <reason>", or "waiting for SPS/PPS / keyframe". **Get that message from the user next** (Properties banner or `source-errors.txt`).
    - If the watchdog says "waiting for SPS/PPS" forever, the camera likely needs UVC 1.5 encoding-unit controls to send an IDR, or a different probe for H.264 (bUsage etc. in the 48-byte probe).
    - If it says "no video over USB", suspect the alternate-setting/endpoint choice or the probe/commit values (`negotiate`, `chooseEndpoint`).
+   - **Elgato 4K S shows no 4K60 modes** (OBS on a laptop does). The likely cause is a USB 2.0 link: UVC capture cards only advertise their high-bandwidth modes at SuperSpeed, and docks often drop data to USB 2 while driving a display.
+     - `detectSpeed` now checks for SuperSpeed endpoint-companion descriptors (0x30), not just bcdUSB.
+     - Properties explains a USB 2.0 link.
+     - Every device's link, formats and raw descriptors are written to `files/usb-devices.txt`. Ask the user for it (`adb shell cat /sdcard/Android/data/com.stream4k60.app/files/usb-devices.txt`).
    - **Missing webcams:** USB permission requests were fired for all devices at once and Android dropped all but one. They are now queued one at a time, and USB source Properties has a **Rescan USB devices** button.
 2. **Audio input error** (the user's audio input source): full message not yet received. Only the UVC streaming interface is claimed, so the camera path should not steal the Insta360 mic. Errors come from `MainStudioViewModel` `syncAudioGraph`/`audioRoutes`.
 3. The mixer's two meter bars show the same level: the engine reports one peak per source. Mono and the audio track checkboxes are not implemented.
