@@ -48,7 +48,8 @@ uniform vec3 uLutMin[2];
 uniform vec3 uLutMax[2];
 uniform float uLutSize[2];
 out vec4 frag;
-vec3 yuvToRgb(float y,float u,float v){y=1.16438356*(y-0.0627451);u=u-0.5019608;v=v-0.5019608;return clamp(vec3(y+1.5960268*v,y-0.391762*u-0.812968*v,y+2.017232*u),0.0,1.0);}
+// Limited-range YUV to RGB: BT.709 for HD frames (capture cards, webcams at 720p+), BT.601 below that.
+vec3 yuvToRgb(float y,float u,float v){y=1.16438356*(y-0.0627451);u=u-0.5019608;v=v-0.5019608;if(uRawSize.y>=720.0)return clamp(vec3(y+1.7927411*v,y-0.2132486*u-0.5329093*v,y+2.1124018*u),0.0,1.0);return clamp(vec3(y+1.5960268*v,y-0.391762*u-0.812968*v,y+2.017232*u),0.0,1.0);}
 // Raw USB frames are sampled at the cropped/flipped coordinate like every other source type.
 vec4 rawColorAt(vec2 st){if(uRawFormat==1||uRawFormat==2){float px=clamp(st.x,0.0,1.0)*uRawSize.x;float pair=floor(px*0.5);float which=mod(floor(px),2.0);vec2 tc=(vec2(pair+0.5,floor(clamp(st.y,0.0,1.0)*uRawSize.y)+0.5))/vec2(max(1.0,ceil(uRawSize.x*0.5)),uRawSize.y);vec4 p=texture(uRawTex,tc);float y,u,v;if(uRawFormat==1){y=(which<0.5)?p.r:p.b;u=p.g;v=p.a;}else{y=(which<0.5)?p.g:p.a;u=p.r;v=p.b;}return vec4(yuvToRgb(y,u,v),1.0);}if(uRawFormat==3){float y=texture(uRawTex,st).r;vec2 uv=texture(uRawAuxTex,st).rg;return vec4(yuvToRgb(y,uv.r,uv.g),1.0);}return vec4(0.0);}
 vec4 sampleSource(vec2 st){return (uExternal==1)?texture(uExtTex,st):(uRawFormat!=0?rawColorAt(st):texture(u2DTex,st));}

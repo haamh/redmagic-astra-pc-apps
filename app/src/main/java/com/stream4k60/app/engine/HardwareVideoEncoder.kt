@@ -53,6 +53,12 @@ class HardwareVideoEncoder(
                 setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
                 setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_ST2084)
                 setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+            } else {
+                // SDR: encode and label as BT.709 limited range, like OBS. Left unset, the encoder picks its own
+                // range/tagging and players can show the stream washed out (grey blacks, dull colours).
+                setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+                setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
             }
         }
         c.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
